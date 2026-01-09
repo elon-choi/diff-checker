@@ -1,0 +1,11 @@
+{
+  "title": "Login",
+  "nodes": [
+    { "role": "textbox", "tag": "input", "name": "id", "path": "/html/body/main/input[1]", "attrs": { "placeholder": "아이디" }, "visible": true },
+    { "role": "textbox", "tag": "input", "name": "password", "path": "/html/body/main/input[2]", "attrs": { "placeholder": "비밀번호", "type": "password" }, "visible": true },
+    { "role": "button", "tag": "button", "name": "login", "text": "로그인", "path": "/html/body/main/button[1]", "visible": true }
+  ]
+}
+
+
+

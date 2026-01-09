@@ -1,0 +1,11 @@
+rules:
+  text.strict:
+    description: "텍스트 일치 여부를 엄격 비교"
+    severity: "MAJOR"
+  missing.element:
+    description: "필수 요소 누락 여부 검사"
+    severity: "CRITICAL"
+
+
+
+

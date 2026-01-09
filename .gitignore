@@ -1,0 +1,10 @@
+# Playwright 스냅샷 테스트 결과
+test-results/
+playwright-report/
+playwright/.cache/
+
+# 기존 gitignore 내용 유지
+node_modules/
+dist/
+build/
+*.log

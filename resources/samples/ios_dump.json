@@ -1,0 +1,11 @@
+{
+  "elements": [
+    { "type": "XCUIElementTypeTextField", "identifier": "input_id", "label": "아이디", "frame": { "x": 18, "y": 110, "w": 320, "h": 44 }, "visible": true },
+    { "type": "XCUIElementTypeSecureTextField", "identifier": "input_password", "label": "비밀번호", "frame": { "x": 18, "y": 166, "w": 320, "h": 44 }, "visible": true },
+    { "type": "XCUIElementTypeButton", "identifier": "btn_login", "label": "로그인", "frame": { "x": 18, "y": 222, "w": 320, "h": 44 }, "visible": true }
+  ]
+}
+
+
+
+

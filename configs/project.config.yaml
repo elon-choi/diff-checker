@@ -1,0 +1,15 @@
+phase: 2
+spec: resources/samples/spec.md
+figma: resources/samples/figma.json
+web: resources/samples/web_dom.json
+rules:
+  include:
+    - text.strict
+    - missing.element
+    - visibility.requirement
+    - policy.basic
+    - structure.basic
+
+
+
+

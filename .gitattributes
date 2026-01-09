@@ -1,0 +1,19 @@
+# UI 보호 정책: UI 관련 파일은 변경 시 주의 필요
+# 이 파일들은 사용자 명시적 요청 없이 변경/삭제 금지
+
+# 웹 앱 UI 파일 보호
+apps/web/src/App.tsx linguist-language=TypeScript
+apps/web/src/App.tsx -diff
+apps/web/src/App.tsx -merge
+
+# Next.js 앱 UI 파일 보호
+apps/diff-checker/app/page.tsx linguist-language=TypeScript
+apps/diff-checker/app/page.tsx -diff
+apps/diff-checker/app/page.tsx -merge
+
+# UI 컴포넌트 디렉토리 (향후 분리 시)
+apps/web/src/components/** linguist-language=TypeScript
+apps/diff-checker/app/components/** linguist-language=TypeScript
+
+# 주의: 위 파일들은 UI PROTECTED 주석이 있는 파일입니다.
+# 변경 시 반드시 사용자 확인이 필요합니다.

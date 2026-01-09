@@ -1,0 +1,11 @@
+{
+  "views": [
+    { "class": "android.widget.EditText", "id": "input_id", "text": "", "bounds": { "x": 20, "y": 120, "w": 320, "h": 48 }, "visible": true, "package": "com.app.sample" },
+    { "class": "android.widget.EditText", "id": "input_password", "text": "", "bounds": { "x": 20, "y": 180, "w": 320, "h": 48 }, "visible": true, "package": "com.app.sample" },
+    { "class": "android.widget.Button", "id": "btn_login", "text": "로그인", "bounds": { "x": 20, "y": 240, "w": 320, "h": 48 }, "visible": true, "package": "com.app.sample" }
+  ]
+}
+
+
+
+

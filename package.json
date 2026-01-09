@@ -1,0 +1,36 @@
+{
+  "name": "diff-checker-monorepo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Multi-Platform Diff Checker (Spec ↔ Figma ↔ Web ↔ Android ↔ iOS)",
+  "license": "MIT",
+  "packageManager": "pnpm@9.12.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*/*"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "start:cli": "tsx apps/cli/src/index.ts",
+    "dev:next": "pnpm -F @diff-checker/next dev",
+    "dev:web": "pnpm -F @diff-checker/web dev",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:ui": "playwright test",
+    "test:ui:update": "playwright test --update-snapshots",
+    "test:ui:ui": "playwright test --ui",
+    "benchmark": "tsx scripts/benchmark.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.57.0",
+    "@vitest/coverage-v8": "^1.6.0",
+    "playwright": "^1.57.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vitest": "^1.6.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
