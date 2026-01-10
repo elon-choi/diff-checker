@@ -52,8 +52,7 @@ pnpm test:ui:ui
 
 ## 보호 대상 파일
 
-- `apps/web/src/App.tsx` - 웹 앱 메인 UI
-- `apps/diff-checker/app/page.tsx` - Next.js 앱 메인 UI
+- `apps/diff-checker/app/page.tsx` - Next.js 앱 메인 UI (단일 앱)
 - 향후 분리될 UI 컴포넌트들
 
 ## 스냅샷 저장 위치
@@ -77,9 +76,10 @@ pnpm test:ui:ui
 ## 문제 해결
 
 ### 스냅샷이 계속 실패하는 경우
-1. 개발 서버가 실행 중인지 확인 (`pnpm dev:web`)
+1. 개발 서버가 실행 중인지 확인 (`pnpm dev:next`)
 2. 브라우저가 설치되었는지 확인 (`pnpm exec playwright install`)
 3. 스냅샷 파일이 올바른지 확인
+4. Next.js 앱이 `http://localhost:3000`에서 실행 중인지 확인
 
 ### 스냅샷 업데이트가 필요한 경우
 - UI를 의도적으로 변경한 경우에만 `pnpm test:ui:update` 실행

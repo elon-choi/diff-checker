@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server';
-import pdfParse from 'pdf-parse';
+
+// pdf-parse v2는 PDFParse 클래스를 사용해야 함
+// Next.js API 라우트는 서버 사이드에서만 실행되므로 require 사용 가능
+const { PDFParse } = require('pdf-parse');
 
 export async function POST(req: Request) {
   try {
@@ -13,12 +16,14 @@ export async function POST(req: Request) {
     if (!file.name.toLowerCase().endsWith('.pdf')) {
       return NextResponse.json({ error: 'PDF 파일만 업로드 가능합니다.' }, { status: 400 });
     }
-
+    
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    const data = await pdfParse(buffer);
-    const text = data.text;
+    // pdf-parse v2 사용법: PDFParse 클래스 인스턴스 생성 후 getText() 호출
+    const parser = new PDFParse({ data: buffer });
+    const result = await parser.getText();
+    const text = result.text;
 
     if (!text || text.trim().length === 0) {
       return NextResponse.json({ error: 'PDF에서 텍스트를 추출할 수 없습니다.' }, { status: 400 });

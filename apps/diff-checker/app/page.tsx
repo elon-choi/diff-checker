@@ -1,7 +1,8 @@
 'use client';
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import type { Finding } from '@/lib/diff';
 import { toMarkdown, toHtml } from '@/lib/report';
+import { parseWikiSections, extractSelectedSectionsHtml, type WikiSection } from '@/lib/wiki-parser';
 type Phase = 1 | 2 | 3 | 4;
 type Severity = 'CRITICAL' | 'MAJOR' | 'MINOR' | 'INFO';
 type Category = 'TEXT_MISMATCH' | 'MISSING_ELEMENT' | 'VISIBILITY' | 'POLICY' | 'STRUCTURE';
@@ -14,7 +15,10 @@ export default function Page() {
   const [specText, setSpecText] = useState('성인 등급은 이용이 제한됩니다\n확인 버튼 노출');
   const [specWikiUrl, setSpecWikiUrl] = useState<string>('');
   const [specWikiRawText, setSpecWikiRawText] = useState<string>(''); // 위키에서 가져온 원본 텍스트
-  const [selectedSections, setSelectedSections] = useState<string[]>([]); // 선택한 섹션 헤더
+  const [specWikiHtml, setSpecWikiHtml] = useState<string>(''); // 위키에서 가져온 원본 HTML
+  const [specWikiSelectedHtml, setSpecWikiSelectedHtml] = useState<string>(''); // 선택된 섹션의 HTML
+  const [wikiSections, setWikiSections] = useState<WikiSection[]>([]); // 파싱된 섹션 목록
+  const [selectedSections, setSelectedSections] = useState<string[]>([]); // 선택한 섹션 ID 목록
   const [confluenceEmail, setConfluenceEmail] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('confluence_email') || '';
@@ -107,10 +111,32 @@ export default function Page() {
         throw new Error(data?.error || '위키 내용을 가져오는데 실패했습니다.');
       }
       const rawText = data.text || '';
+      const rawHtml = data.html || '';
+      
       setSpecWikiRawText(rawText);
-      setSpecText(rawText);
-      setSelectedSections([]); // 섹션 선택 초기화
-      alert('위키 내용을 불러왔습니다. 필요시 아래에서 특정 섹션만 선택하거나 텍스트를 직접 편집할 수 있습니다.');
+      setSpecWikiHtml(rawHtml);
+      
+      // HTML에서 섹션 파싱
+      if (rawHtml) {
+        const sections = parseWikiSections(rawHtml);
+        setWikiSections(sections);
+        
+        // 기본적으로 모든 섹션 선택 (개요/성과/목표 같은 섹션은 나중에 제외 가능)
+        const allSectionIds = getAllSectionIds(sections);
+        setSelectedSections(allSectionIds);
+        
+        // 선택된 섹션만 추출하여 specText에 설정 (HTML 그대로 전달하여 표 파싱 가능하게 함)
+        const selectedHtml = extractSelectedSectionsHtml(rawHtml, allSectionIds);
+        setSpecWikiSelectedHtml(selectedHtml);
+        setSpecText(selectedHtml); // HTML을 그대로 전달하여 표 파싱 가능하게 함
+      } else {
+        // HTML이 없으면 텍스트만 사용
+        setSpecText(rawText);
+        setWikiSections([]);
+        setSelectedSections([]);
+      }
+      
+      alert('위키 내용을 불러왔습니다. 섹션 선택 UI에서 비교에 포함할 섹션을 선택하세요.');
     } catch (e: any) {
       alert(e?.message ?? '위키 내용을 가져오는데 실패했습니다.');
     } finally {
@@ -157,12 +183,21 @@ export default function Page() {
   async function onRun() {
     setRunning(true);
     try {
+      // 선택된 섹션이 있으면 HTML을 전달, 없으면 텍스트 전달
+      const specContent = selectedSections.length > 0 && specWikiSelectedHtml
+        ? specWikiSelectedHtml
+        : specText;
+      
+      // HTML인지 확인 (<table 태그가 있으면 HTML로 간주)
+      const isHtml = specContent.includes('<table') || (selectedSections.length > 0 && specWikiSelectedHtml);
+      
       const res = await fetch('/api/diff', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           phase,
-          specText,
+          specText: specContent,
+          specHtml: isHtml ? specContent : undefined,
           figmaJson: parseJSON(figmaText),
           webJson: parseJSON(webText),
           androidJson: parseJSON(androidText),
@@ -170,7 +205,14 @@ export default function Page() {
         }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'diff failed');
+      if (!res.ok) {
+        // Guardrail 에러인 경우 특별 처리
+        if (data.message && (data.message.includes('Spec 추출 실패') || data.message.includes('Spec 추출 부족'))) {
+          alert(`⚠️ ${data.message}\n\n표 파싱 또는 섹션 선택을 확인해주세요.`);
+          return;
+        }
+        throw new Error(data?.error || data?.message || 'diff failed');
+      }
       setFindings(data.findings || []);
     } catch (e: any) {
       alert(e?.message ?? 'failed');
@@ -279,6 +321,106 @@ export default function Page() {
     }
   }
 
+  // 섹션 선택 변경 핸들러
+  function handleSectionToggle(sectionId: string) {
+    setSelectedSections(prev => {
+      if (prev.includes(sectionId)) {
+        // 선택 해제 시 하위 섹션도 모두 해제
+        const newSelected = prev.filter(id => id !== sectionId);
+        const section = findSectionById(wikiSections, sectionId);
+        if (section) {
+          const childIds = getAllSectionIds([section]);
+          return newSelected.filter(id => !childIds.includes(id));
+        }
+        return newSelected;
+      } else {
+        // 선택 시 하위 섹션도 모두 선택
+        const section = findSectionById(wikiSections, sectionId);
+        if (section) {
+          const childIds = getAllSectionIds([section]);
+          return [...prev, sectionId, ...childIds];
+        }
+        return [...prev, sectionId];
+      }
+    });
+  }
+
+  // 선택된 섹션 변경 시 specText 업데이트
+  useEffect(() => {
+    if (specWikiHtml && selectedSections.length > 0 && wikiSections.length > 0) {
+      const selectedHtml = extractSelectedSectionsHtml(specWikiHtml, selectedSections);
+      setSpecWikiSelectedHtml(selectedHtml);
+      // HTML을 그대로 전달 (표 파싱을 위해)
+      setSpecText(selectedHtml);
+    } else if (specWikiHtml && selectedSections.length === 0) {
+      // 아무것도 선택되지 않으면 빈 텍스트
+      setSpecWikiSelectedHtml('');
+      setSpecText('');
+    }
+  }, [selectedSections, specWikiHtml, wikiSections]);
+
+  // 헬퍼 함수들
+  function getAllSectionIds(sections: WikiSection[]): string[] {
+    const ids: string[] = [];
+    function traverse(sections: WikiSection[]) {
+      for (const section of sections) {
+        ids.push(section.id);
+        if (section.children.length > 0) {
+          traverse(section.children);
+        }
+      }
+    }
+    traverse(sections);
+    return ids;
+  }
+
+  function findSectionById(sections: WikiSection[], id: string): WikiSection | null {
+    for (const section of sections) {
+      if (section.id === id) return section;
+      const found = findSectionById(section.children, id);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function extractTextFromSelectedHtml(html: string): string {
+    if (typeof window === 'undefined') return '';
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    doc.querySelectorAll('script, style').forEach(el => el.remove());
+    return doc.body?.textContent?.trim() || '';
+  }
+
+  function renderSectionTree(sections: WikiSection[], depth: number = 0): React.ReactNode {
+    return sections.map(section => (
+      <div key={section.id} className={depth > 0 ? 'ml-4 mt-1' : ''}>
+        <label className="flex items-start gap-2 cursor-pointer hover:bg-gray-50 p-1 rounded">
+          <input
+            type="checkbox"
+            checked={selectedSections.includes(section.id)}
+            onChange={() => handleSectionToggle(section.id)}
+            className="mt-1"
+          />
+          <div className="flex-1">
+            <span className={`font-medium text-sm ${depth === 0 ? 'text-base' : ''}`}>
+              {section.title || '(제목 없음)'}
+            </span>
+            {section.text && (
+              <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">
+                {section.text.substring(0, 100)}...
+              </p>
+            )}
+          </div>
+        </label>
+        {section.children.length > 0 && (
+          <div className="mt-1">
+            {renderSectionTree(section.children, depth + 1)}
+          </div>
+        )}
+      </div>
+    ));
+  }
+
   function pasteSample(target: 'figma' | 'web' | 'android' | 'ios') {
     const figs = `{
   "type": "FRAME",
@@ -316,7 +458,7 @@ export default function Page() {
     <div className="min-h-screen bg-gray-50">
       <header className="sticky top-0 z-10 bg-white/80 backdrop-blur border-b border-gray-200">
         <div className="mx-auto max-w-7xl px-4 py-3 flex items-center justify-between">
-          <h1 className="text-xl font-semibold tracking-tight">Spec–Design–Implementation Diff Checker</h1>
+          <h1 className="text-[2.5rem] font-semibold tracking-tight">Spec Diff Checker</h1>
           <div className="flex items-center gap-3">
             <label className="text-sm text-gray-600">Phase</label>
             <select
@@ -476,18 +618,52 @@ export default function Page() {
                         )}
                       </div>
                     </div>
-                    {specWikiRawText && (
+                    {wikiSections.length > 0 && (
                       <div className="space-y-2">
                         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
                           <p className="text-xs text-blue-800 font-medium mb-2">📋 범위 지정 방법:</p>
                           <div className="text-xs text-blue-700 space-y-1">
                             <p>1. 아래 섹션 목록에서 비교에 포함할 섹션을 선택하세요</p>
-                            <p>2. 또는 텍스트 영역에서 직접 편집하여 불필요한 부분을 제거하세요</p>
-                            <p>3. "기획 배경", "성과" 등 불필요한 섹션은 제외하는 것을 권장합니다</p>
+                            <p>2. "기획 배경", "성과", "목표" 등 불필요한 섹션은 체크 해제하세요</p>
+                            <p>3. 여러 과제가 섞인 위키에서 과제 단위로 선택 가능합니다</p>
                           </div>
                         </div>
+                        <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-xs font-medium text-gray-700">섹션 선택 ({selectedSections.length}개 선택됨)</p>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => {
+                                  const allIds = getAllSectionIds(wikiSections);
+                                  setSelectedSections(allIds);
+                                }}
+                                className="text-xs text-blue-600 hover:text-blue-800 underline"
+                              >
+                                전체 선택
+                              </button>
+                              <button
+                                onClick={() => setSelectedSections([])}
+                                className="text-xs text-gray-600 hover:text-gray-800 underline"
+                              >
+                                전체 해제
+                              </button>
+                            </div>
+                          </div>
+                          <div className="max-h-60 overflow-y-auto space-y-1 border border-gray-200 rounded p-2 bg-white">
+                            {renderSectionTree(wikiSections)}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {specWikiRawText && wikiSections.length === 0 && (
+                      <div className="space-y-2">
+                        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                          <p className="text-xs text-yellow-800">
+                            ⚠️ 섹션 구조를 파싱할 수 없습니다. 텍스트 입력 모드로 전환하여 직접 편집하세요.
+                          </p>
+                        </div>
                         {(() => {
-                          // 마크다운 헤더 추출 (# ## ###)
+                          // 마크다운 헤더 추출 (# ## ###) - 폴백
                           const headers: Array<{ level: number; text: string; lineIndex: number }> = [];
                           const lines = specWikiRawText.split('\n');
                           lines.forEach((line, idx) => {

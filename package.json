@@ -13,7 +13,6 @@
     "build": "tsc -b",
     "start:cli": "tsx apps/cli/src/index.ts",
     "dev:next": "pnpm -F @diff-checker/next dev",
-    "dev:web": "pnpm -F @diff-checker/web dev",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",

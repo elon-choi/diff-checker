@@ -13,7 +13,7 @@ import { test, expect } from '@playwright/test';
  * 의도하지 않은 변경이라면 즉시 원복하세요.
  */
 
-test.describe('UI 보호: 웹 앱 메인 화면', () => {
+test.describe('UI 보호: Next.js 앱 메인 화면', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
     // 페이지 로드 대기
@@ -31,7 +31,7 @@ test.describe('UI 보호: 웹 앱 메인 화면', () => {
   });
 
   test('Spec 입력 영역 스냅샷', async ({ page }) => {
-    const specInput = page.locator('label:has-text("Spec (Markdown/Text)")').locator('..');
+    const specInput = page.locator('label:has-text("Spec 입력 방식")').locator('..');
     await expect(specInput).toHaveScreenshot('spec-input.png');
   });
 
@@ -45,7 +45,7 @@ test.describe('UI 보호: 웹 앱 메인 화면', () => {
     await page.selectOption('select', '2');
     await page.waitForTimeout(500); // 상태 업데이트 대기
     
-    const webInput = page.locator('label:has-text("Web DOM JSON")').locator('..');
+    const webInput = page.locator('label:has-text("Web DOM JSON (Paste)")').locator('..');
     await expect(webInput).toHaveScreenshot('web-input.png');
   });
 
@@ -54,7 +54,7 @@ test.describe('UI 보호: 웹 앱 메인 화면', () => {
     await page.selectOption('select', '3');
     await page.waitForTimeout(500);
     
-    const androidInput = page.locator('label:has-text("Android Dump JSON")').locator('..');
+    const androidInput = page.locator('label:has-text("Android Dump JSON (Paste)")').locator('..');
     await expect(androidInput).toHaveScreenshot('android-input.png');
   });
 
@@ -63,7 +63,7 @@ test.describe('UI 보호: 웹 앱 메인 화면', () => {
     await page.selectOption('select', '4');
     await page.waitForTimeout(500);
     
-    const iosInput = page.locator('label:has-text("iOS Dump JSON")').locator('..');
+    const iosInput = page.locator('label:has-text("iOS Dump JSON (Paste)")').locator('..');
     await expect(iosInput).toHaveScreenshot('ios-input.png');
   });
 

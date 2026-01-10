@@ -595,11 +595,52 @@ export default function DiffCheckerDashboard() {
                             alert('위키 링크를 입력해주세요.');
                             return;
                           }
+                          
+                          // Confluence 인증 정보를 로컬 스토리지에 저장
+                          if (typeof window !== 'undefined') {
+                            if (confluenceEmail) localStorage.setItem('confluence_email', confluenceEmail);
+                            if (confluenceToken) localStorage.setItem('confluence_token', confluenceToken);
+                            if (confluenceBaseUrl) localStorage.setItem('confluence_base_url', confluenceBaseUrl);
+                          }
+                          
                           setSpecLoading(true);
                           try {
-                            alert('웹 앱에서는 위키 API 호출이 지원되지 않습니다. Next.js 앱을 사용하거나 텍스트 입력 모드에서 직접 붙여넣으세요.');
+                            // Vite 프록시를 통해 Next.js 앱의 API 호출
+                            const res = await fetch('/api/spec/fetch-wiki', {
+                              method: 'POST',
+                              headers: { 'content-type': 'application/json' },
+                              body: JSON.stringify({
+                                url: specWikiUrl,
+                                confluenceEmail: confluenceEmail || undefined,
+                                confluenceToken: confluenceToken || undefined,
+                                confluenceBaseUrl: confluenceBaseUrl || undefined,
+                              }),
+                            });
+                            const data = await res.json();
+                            if (!res.ok) {
+                              if (data.requiresAuth) {
+                                alert(
+                                  '인증이 필요한 위키입니다.\n\n' +
+                                  'Confluence를 사용하는 경우:\n' +
+                                  '1. Confluence API 토큰 발급 (설정 → 보안 → API 토큰)\n' +
+                                  '2. 이메일, API 토큰 입력 (Base URL은 자동 추출됩니다)\n\n' +
+                                  '또는 위키 내용을 직접 복사하여 "텍스트 입력" 탭에 붙여넣으세요.'
+                                );
+                              }
+                              alert(`오류: ${data?.error || '위키 내용을 가져오는데 실패했습니다.'}`);
+                              throw new Error(data?.error || '위키 내용을 가져오는데 실패했습니다.');
+                            }
+                            const rawText = data.text || '';
+                            setSpecWikiRawText(rawText);
+                            setSpecText(rawText);
+                            setSelectedSections([]);
+                            alert('위키 내용을 불러왔습니다. 필요시 아래에서 특정 섹션만 선택하거나 텍스트를 직접 편집할 수 있습니다.');
                           } catch (e: any) {
-                            alert(e?.message ?? '위키 내용을 가져오는데 실패했습니다.');
+                            if (e?.message?.includes('Failed to fetch') || e?.message?.includes('NetworkError')) {
+                              alert('Next.js 앱이 실행 중이지 않습니다.\n\n위키/PDF 기능을 사용하려면 Next.js 앱도 함께 실행해야 합니다:\npnpm dev:next\n\n또는 텍스트 입력 모드에서 직접 붙여넣으세요.');
+                            } else {
+                              alert(e?.message ?? '위키 내용을 가져오는데 실패했습니다.');
+                            }
                           } finally {
                             setSpecLoading(false);
                           }
@@ -715,15 +756,35 @@ export default function DiffCheckerDashboard() {
                       <input
                         type="file"
                         accept=".pdf"
-                        onChange={(e) => {
+                        onChange={async (e) => {
                           const file = e.target.files?.[0];
                           if (file) {
+                            if (!file.name.toLowerCase().endsWith('.pdf')) {
+                              alert('PDF 파일만 업로드 가능합니다.');
+                              return;
+                            }
                             setSpecFile(file);
                             setSpecLoading(true);
-                            setTimeout(() => {
-                              alert('웹 앱에서는 PDF 파싱이 지원되지 않습니다. Next.js 앱을 사용하거나 텍스트 입력 모드에서 직접 붙여넣으세요.');
+                            try {
+                              const formData = new FormData();
+                              formData.append('file', file);
+                              const res = await fetch('/api/spec/parse-pdf', {
+                                method: 'POST',
+                                body: formData,
+                              });
+                              const data = await res.json();
+                              if (!res.ok) throw new Error(data?.error || 'PDF 파싱에 실패했습니다.');
+                              setSpecText(data.text || '');
+                              alert('PDF 내용을 불러왔습니다.');
+                            } catch (e: any) {
+                              if (e?.message?.includes('Failed to fetch') || e?.message?.includes('NetworkError')) {
+                                alert('Next.js 앱이 실행 중이지 않습니다.\n\nNext.js 앱을 실행하려면:\npnpm dev:next\n\n또는 텍스트 입력 모드에서 직접 붙여넣으세요.');
+                              } else {
+                                alert(e?.message ?? 'PDF 파싱에 실패했습니다.');
+                              }
+                            } finally {
                               setSpecLoading(false);
-                            }, 500);
+                            }
                           }
                         }}
                         className="hidden"

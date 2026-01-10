@@ -157,8 +157,15 @@ export const textStrictRule: DiffRule = {
             expected,
             checkedDocs: nonSpecDocs.map((d) => d.platform),
             matchType: null,
+            specItem: item,
           },
           relatedSpecId: item.id,
+          meta: {
+            ...item.meta,
+            ruleName: 'text.strict',
+            ruleReason: `Spec에 정의된 텍스트 "${expected}"가 Figma/Web/앱에 존재하지 않음`,
+            recommendedAction: 'design-update' as const,
+          },
         });
       } else if (match.matchType === 'similarity') {
         const similarity = calculateTextSimilarity(expected, match.node.text || match.node.name || '');
@@ -173,8 +180,15 @@ export const textStrictRule: DiffRule = {
               found: match.node.text || match.node.name,
               similarity,
               matchType: match.matchType,
+              specItem: item,
             },
             relatedSpecId: item.id,
+            meta: {
+              ...item.meta,
+              ruleName: 'text.strict',
+              ruleReason: `Spec 텍스트 "${expected}"와 실제 텍스트 "${match.node.text || match.node.name}"의 유사도가 낮음 (${(similarity * 100).toFixed(0)}%)`,
+              recommendedAction: similarity < 0.7 ? 'design-update' as const : 'spec-update' as const,
+            },
           });
         }
       }
@@ -492,6 +506,36 @@ export const reverseComparisonRule: DiffRule = {
       }
 
       if (!mentioned) {
+        // Figma 텍스트와 가장 유사한 SpecItem 찾기 (매칭 후보)
+        const candidates: Array<{ item: SpecItem; similarity: number }> = [];
+        for (const item of specItems) {
+          if (item.kind === 'TEXT' && item.text) {
+            const similarity = calculateTextSimilarity(figmaText, item.text);
+            if (similarity > 0.1) {
+              candidates.push({ item, similarity });
+            }
+          }
+        }
+        candidates.sort((a, b) => b.similarity - a.similarity);
+        const top3Candidates = candidates.slice(0, 3).map(c => ({
+          text: c.item.text,
+          similarity: c.similarity,
+          specId: c.item.id,
+          meta: c.item.meta,
+        }));
+        
+        // 가장 유사한 SpecItem의 meta 정보 사용
+        const bestMatch = candidates[0];
+        const specMeta = bestMatch?.item.meta;
+        
+        // 추천 액션 결정
+        let recommendedAction: 'spec-update' | 'design-update' | 'ignore-noise' = 'spec-update';
+        if (bestMatch && bestMatch.similarity > 0.7) {
+          recommendedAction = 'design-update'; // 유사도가 높으면 디자인 수정 권장
+        } else if (bestMatch && bestMatch.similarity < 0.3) {
+          recommendedAction = 'ignore-noise'; // 유사도가 매우 낮으면 노이즈로 무시
+        }
+        
         // 헌장 반영: QA 기준 "확인 필요 영역 식별" 단위로 Diff 결과 생성
         // 결함 확정이 아닌 "QA가 확인해야 하는 요구사항 불일치 가능성"으로 표현
         // 기존 description 형식 유지 (호환성 보장)
@@ -508,8 +552,18 @@ export const reverseComparisonRule: DiffRule = {
             intent: 'Spec 문서에 명시된 UI 텍스트와 Figma 디자인 간 일관성 확인',
             expected: figmaText,
             scope: figmaNode.path || '전체',
+            // 매칭 후보 Top3
+            candidates: top3Candidates,
+            // 가장 유사한 SpecItem (있는 경우)
+            specItem: bestMatch?.item,
           },
           relatedSpecId: figmaNode.uid,
+          meta: {
+            ...specMeta,
+            ruleName: 'reverse.comparison',
+            ruleReason: `Figma의 "${figmaText}"가 Spec에 언급되지 않음`,
+            recommendedAction,
+          },
         });
       }
     }

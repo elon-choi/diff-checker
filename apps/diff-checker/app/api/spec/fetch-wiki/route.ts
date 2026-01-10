@@ -69,7 +69,7 @@ export async function POST(req: Request) {
         const htmlContent = data.body?.storage?.value || '';
         const textContent = extractTextFromHtml(htmlContent);
 
-        return NextResponse.json({ text: textContent });
+        return NextResponse.json({ text: textContent, html: htmlContent });
       } catch (e: any) {
         return NextResponse.json(
           { error: `Confluence API 호출 실패: ${e?.message}` },
@@ -113,7 +113,7 @@ export async function POST(req: Request) {
 
     const textContent = extractTextFromHtml(html);
 
-    return NextResponse.json({ text: textContent });
+    return NextResponse.json({ text: textContent, html: html });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? '위키 내용을 가져오는데 실패했습니다.' }, { status: 500 });
   }
