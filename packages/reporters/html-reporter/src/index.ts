@@ -17,8 +17,10 @@ function getSeverityColor(severity: string): string {
       return '#dc2626';
     case 'MAJOR':
       return '#ea580c';
-    case 'MINOR':
+    case 'WARN':
       return '#ca8a04';
+    case 'MINOR':
+      return '#2563eb';
     case 'INFO':
       return '#6b7280';
     default:
@@ -76,17 +78,19 @@ export function toHtml(findings: DiffFinding[], phase: number): string {
   const severityOrder: Record<string, number> = {
     CRITICAL: 0,
     MAJOR: 1,
-    MINOR: 2,
-    INFO: 3,
+    WARN: 2,
+    MINOR: 3,
+    INFO: 4,
   };
   const sortedFindings = [...findings].sort(
-    (a, b) => severityOrder[a.severity] - severityOrder[b.severity]
+    (a, b) => (severityOrder[a.severity] ?? 99) - (severityOrder[b.severity] ?? 99)
   );
 
   const summary = {
     total: findings.length,
     CRITICAL: findings.filter((f) => f.severity === 'CRITICAL').length,
     MAJOR: findings.filter((f) => f.severity === 'MAJOR').length,
+    WARN: findings.filter((f) => f.severity === 'WARN').length,
     MINOR: findings.filter((f) => f.severity === 'MINOR').length,
     INFO: findings.filter((f) => f.severity === 'INFO').length,
   };
@@ -106,8 +110,12 @@ export function toHtml(findings: DiffFinding[], phase: number): string {
         <div class="value" style="color: #ea580c;">${summary.MAJOR}</div>
       </div>
       <div class="summary-card">
+        <div class="label">WARN</div>
+        <div class="value" style="color: #ca8a04;">${summary.WARN}</div>
+      </div>
+      <div class="summary-card">
         <div class="label">MINOR</div>
-        <div class="value" style="color: #ca8a04;">${summary.MINOR}</div>
+        <div class="value" style="color: #2563eb;">${summary.MINOR}</div>
       </div>
       <div class="summary-card">
         <div class="label">INFO</div>
@@ -136,7 +144,9 @@ export function toHtml(findings: DiffFinding[], phase: number): string {
       total: groupFindings.length,
       CRITICAL: groupFindings.filter(f => f.severity === 'CRITICAL').length,
       MAJOR: groupFindings.filter(f => f.severity === 'MAJOR').length,
+      WARN: groupFindings.filter(f => f.severity === 'WARN').length,
       MINOR: groupFindings.filter(f => f.severity === 'MINOR').length,
+      INFO: groupFindings.filter(f => f.severity === 'INFO').length,
     };
     
     const findingsDetails = groupFindings.map(f => {
@@ -209,7 +219,9 @@ export function toHtml(findings: DiffFinding[], phase: number): string {
           <div class="requirement-summary">
             <span class="badge critical">CRITICAL: ${groupSummary.CRITICAL}</span>
             <span class="badge major">MAJOR: ${groupSummary.MAJOR}</span>
+            <span class="badge warn">WARN: ${groupSummary.WARN}</span>
             <span class="badge minor">MINOR: ${groupSummary.MINOR}</span>
+            <span class="badge info">INFO: ${groupSummary.INFO}</span>
             <span class="badge total">총 ${groupSummary.total}건</span>
           </div>
         </div>
@@ -326,7 +338,7 @@ export function toHtml(findings: DiffFinding[], phase: number): string {
     /* Summary */
     .summary {
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
+      grid-template-columns: repeat(5, 1fr);
       gap: 16px;
       margin: 24px 0;
     }
@@ -398,6 +410,14 @@ export function toHtml(findings: DiffFinding[], phase: number): string {
     .badge.minor {
       background-color: #fef3c7;
       color: #854d0e;
+    }
+    .badge.warn {
+      background-color: #fef3c7;
+      color: #854d0e;
+    }
+    .badge.info {
+      background-color: #e5e7eb;
+      color: #374151;
     }
     .badge.total {
       background-color: #e0e7ff;

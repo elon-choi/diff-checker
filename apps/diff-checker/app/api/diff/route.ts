@@ -9,6 +9,7 @@ import { IOSNormalizer } from '../../../../../packages/normalizers/ios-normalize
 import type { SpecItem } from '../../../../../packages/core-engine/src/types';
 import { extractSpecItemsFromTables } from '../../../lib/table-parser';
 import { isNoiseSpecItem, isNoise } from '../../../lib/noise-filter';
+import { extractSelectorKeyFromText, removeSelectorKeyFromText, normalizeKey } from '../../../../../packages/core-engine/src/utils/selector-key';
 
 // 업데이트 날짜 패턴: "Update date: 25.12.10", "업데이트: 25.12.10", "(Update date: 25.12.10)" 등
 const UPDATE_DATE_PATTERNS = [
@@ -114,6 +115,15 @@ function parseLineForUpdates(line: string): { text: string; isDeprecated: boolea
 function deriveSpecItemsFromMarkdown(specText: string): SpecItem[] {
   const items: SpecItem[] = [];
   
+  // Phase-2: 섹션 경로 추적을 위한 스택
+  const sectionStack: Array<{ level: number; title: string }> = [];
+  
+  // 섹션 경로 생성 함수
+  const getSectionPath = (): string => {
+    if (sectionStack.length === 0) return '';
+    return sectionStack.map(s => s.title).join(' > ');
+  };
+  
   // 1. HTML 표 파싱 (표가 있으면 우선 처리)
   const hasTable = specText.includes('<table');
   if (hasTable) {
@@ -122,12 +132,30 @@ function deriveSpecItemsFromMarkdown(specText: string): SpecItem[] {
       console.log('[DEBUG] HTML 샘플 (처음 1000자):', specText.substring(0, 1000));
       const tableItems = extractSpecItemsFromTables(specText);
       console.log('[DEBUG] 표에서 추출된 SpecItem 수:', tableItems.length);
+      
+      // Phase-2: 표 항목에 selectorKey와 sectionPath 추가
+      for (const item of tableItems) {
+        if (item.text) {
+          const selectorKey = extractSelectorKeyFromText(item.text);
+          if (selectorKey) {
+            item.selectorKey = selectorKey;
+            item.text = removeSelectorKeyFromText(item.text);
+          }
+          // sectionPath는 표 파싱 시 meta.section에서 가져올 수 있음
+          if (item.meta?.section) {
+            item.sectionPath = item.meta.section;
+          }
+        }
+      }
+      
       if (tableItems.length === 0) {
         console.warn('[DEBUG] 표 파싱 결과가 비어있습니다. 표 구조를 확인하세요.');
       } else {
         console.log('[DEBUG] 추출된 SpecItem 예시:', tableItems.slice(0, 3).map(item => ({
           id: item.id,
           text: item.text?.substring(0, 50),
+          selectorKey: item.selectorKey,
+          sectionPath: item.sectionPath,
           source: item.meta?.source,
         })));
       }
@@ -145,6 +173,20 @@ function deriveSpecItemsFromMarkdown(specText: string): SpecItem[] {
   
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
+    
+    // Phase-2: 마크다운 헤더 감지 및 섹션 스택 업데이트
+    const headerMatch = line.match(/^(#{1,6})\s+(.+)$/);
+    if (headerMatch) {
+      const level = headerMatch[1].length;
+      const title = headerMatch[2].trim();
+      
+      // 현재 레벨보다 낮거나 같은 헤더가 나오면 스택 정리
+      while (sectionStack.length > 0 && sectionStack[sectionStack.length - 1].level >= level) {
+        sectionStack.pop();
+      }
+      sectionStack.push({ level, title });
+      continue; // 헤더는 SpecItem으로 추가하지 않음
+    }
     
     // 업데이트/취소선 정보 파싱
     const parsed = parseLineForUpdates(line);
@@ -166,17 +208,24 @@ function deriveSpecItemsFromMarkdown(specText: string): SpecItem[] {
     const cleanLine = processedLine.replace(/<[^>]+>/g, '').trim();
     if (!cleanLine) continue;
     
+    // Phase-2: selectorKey 추출
+    const selectorKey = extractSelectorKeyFromText(cleanLine);
+    const textWithoutKey = selectorKey ? removeSelectorKeyFromText(cleanLine) : cleanLine;
+    const sectionPath = getSectionPath();
+    
     // 1. 따옴표로 감싼 텍스트 추출 (UI 텍스트로 간주)
-    const quoted = cleanLine.match(/"([^"]+)"/);
+    const quoted = textWithoutKey.match(/"([^"]+)"/);
     if (quoted) {
       const text = quoted[1];
       // 따옴표 텍스트도 메타데이터인지 확인
       if (!isMetadata(text)) {
-        // 헌장 반영: RequirementItem 구조로 해석 (기존 필드 유지)
+        // Phase-2: selectorKey와 sectionPath 추가
         items.push({ 
           id: `spec-text-${i}`, 
           kind: 'TEXT', 
           text,
+          selectorKey,
+          sectionPath: sectionPath || undefined,
           // 헌장 필드 추가 (optional, 기존 동작 유지)
           intent: `UI 텍스트 "${text}"가 화면에 표시되어야 함`,
           expected: text,
@@ -186,6 +235,13 @@ function deriveSpecItemsFromMarkdown(specText: string): SpecItem[] {
             updateDate: parsed.updateDate,
             note: `업데이트됨 (${parsed.updateDate})`
           } : undefined,
+          meta: {
+            ...(parsed.isUpdated ? { 
+              isUpdated: true, 
+              updateDate: parsed.updateDate,
+            } : {}),
+            isDeprecated: parsed.isDeprecated,
+          },
         });
       }
       continue;
@@ -231,21 +287,30 @@ function deriveSpecItemsFromMarkdown(specText: string): SpecItem[] {
       const hasUIKeyword = uiKeywords.some(keyword => cleanLine.includes(keyword));
       
       // 짧은 텍스트(20자 이하)이거나 UI 키워드가 있는 경우만 포함
-      if (hasUIKeyword || (cleanLine.length <= 20 && cleanLine.length > 2)) {
-        // 헌장 반영: RequirementItem 구조로 해석 (기존 필드 유지)
+      if (hasUIKeyword || (textWithoutKey.length <= 20 && textWithoutKey.length > 2)) {
+        // Phase-2: selectorKey와 sectionPath 추가
         items.push({ 
           id: `spec-text-${i}`, 
           kind: 'TEXT', 
-          text: cleanLine,
+          text: textWithoutKey,
+          selectorKey,
+          sectionPath: sectionPath || undefined,
           // 헌장 필드 추가 (optional, 기존 동작 유지)
-          intent: `UI 텍스트 "${cleanLine}"가 화면에 표시되어야 함`,
-          expected: cleanLine,
+          intent: `UI 텍스트 "${textWithoutKey}"가 화면에 표시되어야 함`,
+          expected: textWithoutKey,
           type: 'UI_TEXT' as any,
           conditions: parsed.isUpdated ? { 
             isUpdated: true, 
             updateDate: parsed.updateDate,
             note: `업데이트됨 (${parsed.updateDate})`
           } : undefined,
+          meta: {
+            ...(parsed.isUpdated ? { 
+              isUpdated: true, 
+              updateDate: parsed.updateDate,
+            } : {}),
+            isDeprecated: parsed.isDeprecated,
+          },
         });
       }
     }
@@ -353,12 +418,15 @@ export async function POST(req: Request) {
       }, { status: 400 });
     }
     
-    if (validSpecItems.length < 3) {
+    // Guardrail: SpecItems(TEXT) 개수 < 5 이면 Diff 실행하지 않음
+    const textSpecItems = validSpecItems.filter((item) => item.kind === 'TEXT' && item.text);
+    if (textSpecItems.length < 5) {
       return NextResponse.json({ 
         error: 'Spec 추출 부족',
-        message: `유효한 SpecItem이 ${validSpecItems.length}개만 추출되었습니다. 표 파싱 또는 섹션 선택을 확인해주세요.\n\n디버깅 정보:\n- 표 포함 여부: ${hasTable ? '예' : '아니오'}\n- 표에서 추출된 항목: ${tableItemsCount}개\n- 텍스트에서 추출된 항목: ${textItemsCount}개\n- 전체 추출 항목: ${specItems.length}개`,
+        message: `Spec에서 UI 텍스트를 거의 추출하지 못했습니다. 표 파싱 / 섹션 선택 / 필터 규칙을 확인하세요.\n\n디버깅 정보:\n- 표 포함 여부: ${hasTable ? '예' : '아니오'}\n- 표에서 추출된 항목: ${tableItemsCount}개\n- 텍스트에서 추출된 항목: ${textItemsCount}개\n- 전체 추출 항목: ${specItems.length}개\n- TEXT 항목: ${textSpecItems.length}개 (최소 5개 필요)`,
         specItemsCount: specItems.length,
         validSpecItemsCount: validSpecItems.length,
+        textSpecItemsCount: textSpecItems.length,
         debug: {
           hasTable,
           tableItemsCount,
@@ -392,7 +460,14 @@ export async function POST(req: Request) {
         total: filteredFindings.length,
         filtered: findings.length - filteredFindings.length,
         specItemsCount: validSpecItems.length,
-      }
+      },
+      specItems: validSpecItems.map(item => ({
+        id: item.id,
+        text: item.text,
+        selectorKey: item.selectorKey,
+        sectionPath: item.sectionPath,
+        meta: item.meta,
+      }))
     });
   } catch (e: any) {
     return NextResponse.json({ error: e?.message ?? 'unknown error' }, { status: 400 });

@@ -1,4 +1,5 @@
 import { UUMDocument, UUMNode } from '../../../core-engine/src/types';
+import { extractSelectorKeyFromText, normalizeKey } from '../../../core-engine/src/utils/selector-key';
 
 export const FigmaNormalizer = {
   canHandle: (input: any) =>
@@ -118,6 +119,13 @@ export const FigmaNormalizer = {
           return;
         }
 
+        // Phase-2: node.name에서 selectorKey 파싱
+        // 예: name: "[key:sort.default] 인기순" 또는 "SortDefaultLabel [key:sort.default]"
+        let selectorKey: string | undefined;
+        if (node.name) {
+          selectorKey = extractSelectorKeyFromText(node.name);
+        }
+
         // 실제 UI 텍스트만 포함 (레이어 이름은 제외)
         nodes.push({
           uid: node.id ? String(node.id) : `figma-${idx}`,
@@ -126,6 +134,8 @@ export const FigmaNormalizer = {
           text: node.characters, // 실제 UI 텍스트만 사용 (name 제외)
           selector: path,
           visible: true, // TEXT 노드이고 visible이 false가 아니므로 true
+          selectorKey, // Phase-2: selectorKey 추가
+          figmaPath: path, // Phase-2: figmaPath 추가
           bounds: node.absoluteBoundingBox
             ? {
                 x: node.absoluteBoundingBox.x ?? 0,
@@ -148,6 +158,16 @@ export const FigmaNormalizer = {
             const text = content.trim();
             // 디자이너 가이드 텍스트 필터링
             if (!isDesignerGuideText(text)) {
+              // Phase-2: Content 배열에서도 selectorKey 추출 시도 (item.name 또는 item.key 등)
+              let selectorKey: string | undefined;
+              if (item.name) {
+                selectorKey = extractSelectorKeyFromText(item.name);
+              } else if (item.key) {
+                selectorKey = normalizeKey(item.key);
+              } else if (item.selectorKey) {
+                selectorKey = normalizeKey(item.selectorKey);
+              }
+              
               nodes.push({
                 uid: `figma-content-${idx}`,
                 platform: 'FIGMA',
@@ -155,6 +175,8 @@ export const FigmaNormalizer = {
                 text: text,
                 selector: `/figma/content/${idx}`,
                 visible: true,
+                selectorKey, // Phase-2: selectorKey 추가
+                figmaPath: `/figma/content/${idx}`, // Phase-2: figmaPath 추가
                 meta: { rawType: 'CONTENT', source: 'plugin-export' },
                 path: `/figma/content/${idx}`,
               });

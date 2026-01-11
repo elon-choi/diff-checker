@@ -1,5 +1,6 @@
 import type { SpecItem } from '../../../packages/core-engine/src/types';
 import * as cheerio from 'cheerio';
+import { extractSelectorKeyFromText, removeSelectorKeyFromText } from '../../../packages/core-engine/src/utils/selector-key';
 
 export interface TableRow {
   no?: string;
@@ -361,12 +362,20 @@ export function tableRowsToSpecItems(rows: TableRow[]): SpecItem[] {
       const quotedMatches = content.match(/"([^"]+)"/g);
       if (quotedMatches) {
         quotedMatches.forEach((quoted, qIndex) => {
-          const text = quoted.replace(/"/g, '').trim();
+          let text = quoted.replace(/"/g, '').trim();
           if (text && !shouldExclude(text)) {
+            // Phase-2: selectorKey 추출
+            const selectorKey = extractSelectorKeyFromText(text);
+            if (selectorKey) {
+              text = removeSelectorKeyFromText(text);
+            }
+            
             items.push({
               id: `table-row-${index}-content-quoted-${qIndex}`,
               kind: 'TEXT',
               text,
+              selectorKey,
+              sectionPath: item || undefined,
               intent: `표의 "내용" 컬럼에서 추출된 UI 텍스트 "${text}"가 화면에 표시되어야 함`,
               expected: text,
               conditions: {

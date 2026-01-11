@@ -2,7 +2,7 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import type { Finding } from '@/lib/diff';
 import { toMarkdown, toHtml } from '@/lib/report';
-import { parseWikiSections, extractSelectedSectionsHtml, type WikiSection } from '@/lib/wiki-parser';
+import { parseWikiSections, extractSelectedSectionsHtml, parsePdfSections, extractSelectedPdfSections, type WikiSection } from '@/lib/wiki-parser';
 type Phase = 1 | 2 | 3 | 4;
 type Severity = 'CRITICAL' | 'MAJOR' | 'MINOR' | 'INFO';
 type Category = 'TEXT_MISMATCH' | 'MISSING_ELEMENT' | 'VISIBILITY' | 'POLICY' | 'STRUCTURE';
@@ -17,8 +17,10 @@ export default function Page() {
   const [specWikiRawText, setSpecWikiRawText] = useState<string>(''); // 위키에서 가져온 원본 텍스트
   const [specWikiHtml, setSpecWikiHtml] = useState<string>(''); // 위키에서 가져온 원본 HTML
   const [specWikiSelectedHtml, setSpecWikiSelectedHtml] = useState<string>(''); // 선택된 섹션의 HTML
-  const [wikiSections, setWikiSections] = useState<WikiSection[]>([]); // 파싱된 섹션 목록
+  const [wikiSections, setWikiSections] = useState<WikiSection[]>([]); // 파싱된 섹션 목록 (위키 또는 PDF)
   const [selectedSections, setSelectedSections] = useState<string[]>([]); // 선택한 섹션 ID 목록
+  const [pdfRawText, setPdfRawText] = useState<string>(''); // PDF에서 가져온 원본 텍스트
+  const [pdfSelectedText, setPdfSelectedText] = useState<string>(''); // 선택된 PDF 섹션의 텍스트
   const [confluenceEmail, setConfluenceEmail] = useState<string>(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('confluence_email') || '';
@@ -49,23 +51,138 @@ export default function Page() {
   const [iosText, setIosText] = useState<string>('');
 
   const [findings, setFindings] = useState<Finding[]>([]);
+  const [specItemsCount, setSpecItemsCount] = useState<number>(0); // API에서 받은 SpecItem 개수
   const [running, setRunning] = useState(false);
+  // Phase-2: 필터 토글
+  const [showKeyedOnly, setShowKeyedOnly] = useState(false);
+  const [showUnmapped, setShowUnmapped] = useState(true);
+  const [showReverse, setShowReverse] = useState(false);
+  const [showDebug, setShowDebug] = useState(false); // Debug 패널 토글
+
+  // Phase 1: 필터링된 findings (Safe Upgrade Plan - Debug 패널 분리)
+  const filteredFindings = useMemo(() => {
+    return findings.filter(f => {
+      const selectorKey = (f as any).selectorKey;
+      const diffType = (f as any).diffType;
+      const ruleName = (f as any).meta?.ruleName;
+      
+      // Debug 모드가 아니면 reverse와 unmapped 숨김
+      if (!showDebug) {
+        if (ruleName === 'reverse.comparison') return false;
+        if (diffType === 'UNMAPPED') return false;
+      }
+      
+      // Keyed only 필터 (Debug 모드에서만 사용)
+      if (showKeyedOnly && !selectorKey) return false;
+      
+      // Unmapped 필터 (Debug 모드에서만 사용)
+      if (!showUnmapped && diffType === 'UNMAPPED') return false;
+      
+      // Reverse 필터 (Debug 모드에서만 사용)
+      if (!showReverse && ruleName === 'reverse.comparison') return false;
+      
+      return true;
+    });
+  }, [findings, showKeyedOnly, showUnmapped, showReverse, showDebug]);
 
   const summary = useMemo(() => {
-    const by: Record<Severity, number> = { CRITICAL: 0, MAJOR: 0, MINOR: 0, INFO: 0 };
-    for (const f of findings) by[f.severity]++;
-    return by;
+    // Severity별 Finding 수는 전체 findings를 기준으로 계산 (필터링 전)
+    const by: Record<string, number> = { CRITICAL: 0, MAJOR: 0, MINOR: 0, INFO: 0, WARN: 0 };
+    const byReasonCode: Record<string, number> = {};
+    
+    // 전체 findings를 기준으로 계산
+    for (const f of findings) {
+      const severity = f.severity || 'INFO';
+      by[severity] = (by[severity] || 0) + 1;
+      const reasonCode = (f as any).decisionMetadata?.decision_reason_code || 'UNKNOWN';
+      byReasonCode[reasonCode] = (byReasonCode[reasonCode] || 0) + 1;
+    }
+    
+    return { bySeverity: by, byReasonCode, total: findings.length };
   }, [findings]);
 
+  // Phase 1: SpecItem 기준 그룹화 (Safe Upgrade Plan)
+  const groupedFindings = useMemo(() => {
+    const groups: Record<string, { specTitle: string; specItemId?: string; findings: Finding[] }> = {};
+    
+    for (const f of filteredFindings) {
+      // SpecItem ID 또는 requirement를 key로 사용
+      const specItemId = (f as any).relatedSpecId || f.id.split(':')[1] || 'unknown';
+      const requirement = (f as any).requirement || 
+                          (f as any).specSideEvidence?.spec_section || 
+                          (f as any).meta?.section || 
+                          '기타';
+      
+      // specTitle 생성 (sectionPath 또는 requirement 사용)
+      const specTitle = (f as any).requirement || 
+                       (f as any).specSideEvidence?.spec_section || 
+                       (f as any).meta?.section || 
+                       '기타';
+      
+      const key = specItemId !== 'unknown' ? specItemId : requirement;
+      
+      if (!groups[key]) {
+        groups[key] = {
+          specTitle,
+          specItemId: specItemId !== 'unknown' ? specItemId : undefined,
+          findings: [],
+        };
+      }
+      groups[key].findings.push(f);
+    }
+    
+    return groups;
+  }, [filteredFindings]);
+  
+  // 요구사항별 통계 계산 (Safe Upgrade Plan - 전체 findings 기준)
+  const requirementStats = useMemo(() => {
+    // SpecItem 개수를 기준으로 요구사항 수 계산
+    const totalRequirements = specItemsCount > 0 ? specItemsCount : 0;
+    
+    if (totalRequirements === 0) {
+      return { totalRequirements: 0, matchedCount: 0, diffCount: 0 };
+    }
+    
+    // 전체 findings를 기준으로 계산 (필터링 전)
+    // SpecItem과 매핑된 finding만 요구사항 차이로 계산
+    const specItemIdsWithFindings = new Set<string>();
+    
+    for (const f of findings) {
+      // reverse.comparison은 요구사항 차이가 아님 (Figma에만 있는 것)
+      const ruleName = (f as any).meta?.ruleName;
+      if (ruleName === 'reverse.comparison') {
+        continue; // reverse finding은 요구사항 차이에 포함하지 않음
+      }
+      
+      // SpecItem과 매핑된 finding만 카운트
+      const specItemId = (f as any).relatedSpecId || f.id.split(':')[1];
+      if (specItemId && specItemId !== 'unknown') {
+        const hasDiff = f.severity === 'MAJOR' || 
+                       f.severity === 'CRITICAL' || 
+                       f.severity === 'WARN' || 
+                       f.severity === 'MINOR';
+        if (hasDiff) {
+          specItemIdsWithFindings.add(specItemId);
+        }
+      }
+    }
+    
+    const diffCount = specItemIdsWithFindings.size;
+    const matchedCount = Math.max(0, totalRequirements - diffCount);
+    
+    return { totalRequirements, matchedCount, diffCount };
+  }, [findings, specItemsCount]);
+
   const sortedFindings = useMemo(() => {
-    const severityOrder: Record<Severity, number> = {
+    const severityOrder: Record<string, number> = {
       CRITICAL: 0,
       MAJOR: 1,
-      MINOR: 2,
-      INFO: 3,
+      WARN: 2,
+      MINOR: 3,
+      INFO: 4,
     };
     return [...findings].sort((a, b) => {
-      return severityOrder[a.severity] - severityOrder[b.severity];
+      return (severityOrder[a.severity] || 99) - (severityOrder[b.severity] || 99);
     });
   }, [findings]);
 
@@ -171,8 +288,18 @@ export default function Page() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'PDF 파싱에 실패했습니다.');
-      setSpecText(data.text || '');
-      alert('PDF 내용을 불러왔습니다.');
+      
+      const pdfText = data.text || '';
+      setPdfRawText(pdfText);
+      setSpecText(pdfText);
+      
+      // PDF 텍스트에서 섹션 파싱
+      const sections = parsePdfSections(pdfText);
+      setWikiSections(sections);
+      setSelectedSections([]); // 초기에는 선택 없음
+      setPdfSelectedText('');
+      
+      alert('PDF 내용을 불러왔습니다. 섹션을 선택하여 원하는 영역만 추출할 수 있습니다.');
     } catch (e: any) {
       alert(e?.message ?? 'PDF 파싱에 실패했습니다.');
     } finally {
@@ -183,13 +310,36 @@ export default function Page() {
   async function onRun() {
     setRunning(true);
     try {
-      // 선택된 섹션이 있으면 HTML을 전달, 없으면 텍스트 전달
-      const specContent = selectedSections.length > 0 && specWikiSelectedHtml
-        ? specWikiSelectedHtml
-        : specText;
+      // 선택된 섹션이 있으면 해당 내용 전달
+      let specContent = specText;
+      let isHtml = false;
+      
+      if (selectedSections.length > 0) {
+        // 위키 HTML인 경우
+        if (specWikiSelectedHtml) {
+          specContent = specWikiSelectedHtml;
+          isHtml = true;
+        }
+        // PDF 텍스트인 경우
+        else if (pdfSelectedText) {
+          specContent = pdfSelectedText;
+          isHtml = false;
+        }
+      } else {
+        // 선택된 섹션이 없으면 원본 사용
+        if (specWikiHtml) {
+          specContent = specWikiHtml;
+          isHtml = true;
+        } else if (pdfRawText) {
+          specContent = pdfRawText;
+          isHtml = false;
+        }
+      }
       
       // HTML인지 확인 (<table 태그가 있으면 HTML로 간주)
-      const isHtml = specContent.includes('<table') || (selectedSections.length > 0 && specWikiSelectedHtml);
+      if (!isHtml) {
+        isHtml = specContent.includes('<table');
+      }
       
       const res = await fetch('/api/diff', {
         method: 'POST',
@@ -214,6 +364,7 @@ export default function Page() {
         throw new Error(data?.error || data?.message || 'diff failed');
       }
       setFindings(data.findings || []);
+      setSpecItemsCount(data.summary?.specItemsCount || 0); // SpecItem 개수 저장
     } catch (e: any) {
       alert(e?.message ?? 'failed');
     } finally {
@@ -347,6 +498,7 @@ export default function Page() {
 
   // 선택된 섹션 변경 시 specText 업데이트
   useEffect(() => {
+    // 위키 HTML인 경우
     if (specWikiHtml && selectedSections.length > 0 && wikiSections.length > 0) {
       const selectedHtml = extractSelectedSectionsHtml(specWikiHtml, selectedSections);
       setSpecWikiSelectedHtml(selectedHtml);
@@ -357,7 +509,18 @@ export default function Page() {
       setSpecWikiSelectedHtml('');
       setSpecText('');
     }
-  }, [selectedSections, specWikiHtml, wikiSections]);
+    
+    // PDF 텍스트인 경우
+    if (pdfRawText && selectedSections.length > 0 && wikiSections.length > 0) {
+      const selectedText = extractSelectedPdfSections(pdfRawText, selectedSections);
+      setPdfSelectedText(selectedText);
+      setSpecText(selectedText);
+    } else if (pdfRawText && selectedSections.length === 0) {
+      // 아무것도 선택되지 않으면 전체 텍스트 사용
+      setPdfSelectedText('');
+      setSpecText(pdfRawText);
+    }
+  }, [selectedSections, specWikiHtml, pdfRawText, wikiSections]);
 
   // 헬퍼 함수들
   function getAllSectionIds(sections: WikiSection[]): string[] {
@@ -818,6 +981,72 @@ export default function Page() {
                         )}
                       </div>
                     </label>
+                    {wikiSections.length > 0 && pdfRawText && (
+                      <div className="space-y-2">
+                        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                          <p className="text-xs text-blue-800 font-medium mb-2">📋 범위 지정 방법:</p>
+                          <div className="text-xs text-blue-700 space-y-1">
+                            <p>1. 아래 섹션 목록에서 비교에 포함할 섹션을 선택하세요</p>
+                            <p>2. "기획 배경", "성과", "목표" 등 불필요한 섹션은 체크 해제하세요</p>
+                            <p>3. 여러 과제가 섞인 문서에서 과제 단위로 선택 가능합니다</p>
+                          </div>
+                        </div>
+                        <div className="bg-gray-50 rounded-lg p-3 border border-gray-200">
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-xs font-medium text-gray-700">섹션 선택 ({selectedSections.length}개 선택됨)</p>
+                            <div className="flex gap-2">
+                              <button
+                                onClick={() => {
+                                  const allIds = getAllSectionIds(wikiSections);
+                                  setSelectedSections(allIds);
+                                }}
+                                className="text-xs text-blue-600 hover:text-blue-800 underline"
+                              >
+                                전체 선택
+                              </button>
+                              <button
+                                onClick={() => setSelectedSections([])}
+                                className="text-xs text-gray-600 hover:text-gray-800 underline"
+                              >
+                                전체 해제
+                              </button>
+                            </div>
+                          </div>
+                          <div className="max-h-60 overflow-y-auto space-y-1 border border-gray-200 rounded p-2 bg-white">
+                            {renderSectionTree(wikiSections)}
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {specText && pdfRawText && (
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between">
+                          <label className="text-xs font-medium text-gray-700">비교에 사용할 내용 (편집 가능):</label>
+                          {pdfRawText && specText !== pdfRawText && (
+                            <button
+                              onClick={() => {
+                                if (confirm('원본으로 복원하시겠습니까? 현재 편집 내용이 사라집니다.')) {
+                                  setSpecText(pdfRawText);
+                                  setSelectedSections([]);
+                                }
+                              }}
+                              className="text-xs text-gray-500 hover:text-gray-700 underline"
+                            >
+                              원본 복원
+                            </button>
+                          )}
+                        </div>
+                        <textarea
+                          className="w-full min-h-[200px] rounded-lg border-gray-300 shadow-sm focus:ring-2 focus:ring-black/10 text-sm font-mono"
+                          value={specText}
+                          onChange={(e) => setSpecText(e.target.value)}
+                          placeholder="PDF에서 추출된 내용이 여기에 표시됩니다. 필요시 직접 편집하여 불필요한 부분을 제거하세요."
+                        />
+                        <p className="text-xs text-gray-500">
+                          💡 기획 배경, 성과 등 UI 비교와 무관한 내용은 제거하는 것을 권장합니다.
+                        </p>
+                      </div>
+                    )}
                     {specText && (
                       <textarea
                         className="w-full min-h-[120px] rounded-lg border-gray-300 shadow-sm focus:ring-2 focus:ring-black/10 text-sm"
@@ -1069,43 +1298,195 @@ export default function Page() {
         </section>
 
         <section className="space-y-4">
+          {/* (1) Summary - Phase 1 개선 */}
           <div className="bg-white rounded-2xl shadow p-4">
-            <h2 className="font-semibold mb-2">② Summary</h2>
-            <div className="grid grid-cols-4 gap-3 text-center">
-              <Card label="CRITICAL" value={summary.CRITICAL} className="text-red-600" />
-              <Card label="MAJOR" value={summary.MAJOR} className="text-orange-600" />
-              <Card label="MINOR" value={summary.MINOR} className="text-yellow-600" />
-              <Card label="INFO" value={summary.INFO} className="text-gray-800" />
+            <h2 className="font-semibold mb-3">② Summary</h2>
+            <div className="space-y-4">
+              {/* 요구사항 기준 Summary */}
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                <h3 className="text-sm font-medium text-gray-700 mb-2">요구사항 비교 결과</h3>
+                <div className="text-2xl font-bold text-gray-800 mb-1">
+                  요구사항 {requirementStats.totalRequirements}개 중
+                </div>
+                <div className="grid grid-cols-2 gap-3 mt-3">
+                  <div className="bg-green-50 border border-green-200 rounded p-3">
+                    <div className="text-xs text-green-700 mb-1">일치</div>
+                    <div className="text-xl font-bold text-green-800">{requirementStats.matchedCount}개</div>
+                  </div>
+                  <div className="bg-orange-50 border border-orange-200 rounded p-3">
+                    <div className="text-xs text-orange-700 mb-1">차이 있음</div>
+                    <div className="text-xl font-bold text-orange-800">{requirementStats.diffCount}개</div>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Severity별 개수 (상세) */}
+              <div>
+                <h3 className="text-sm font-medium text-gray-700 mb-2">Severity별 Finding 수</h3>
+                <div className="grid grid-cols-5 gap-2 text-center">
+                  <Card label="CRITICAL" value={summary.bySeverity.CRITICAL || 0} className="text-red-600" />
+                  <Card label="MAJOR" value={summary.bySeverity.MAJOR || 0} className="text-orange-600" />
+                  <Card label="WARN" value={summary.bySeverity.WARN || 0} className="text-yellow-600" />
+                  <Card label="MINOR" value={summary.bySeverity.MINOR || 0} className="text-blue-600" />
+                  <Card label="INFO" value={summary.bySeverity.INFO || 0} className="text-gray-600" />
+                </div>
+              </div>
             </div>
           </div>
 
+          {/* (2) By Requirement - Phase 1 카드 형태 */}
           <div className="bg-white rounded-2xl shadow p-4 overflow-hidden">
-            <h2 className="font-semibold mb-3">③ Findings</h2>
-            {findings.length === 0 ? (
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="font-semibold">③ By Requirement</h2>
+              <button
+                onClick={() => setShowDebug(!showDebug)}
+                className="text-xs px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded"
+              >
+                {showDebug ? 'Hide' : 'Show'} Debug
+              </button>
+            </div>
+            
+            {/* Debug 모드 필터 (Debug 패널에서만 표시) */}
+            {showDebug && (
+              <div className="mb-3 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs">
+                <div className="font-medium mb-2">Debug Filters:</div>
+                <div className="flex gap-3">
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={showKeyedOnly}
+                      onChange={(e) => setShowKeyedOnly(e.target.checked)}
+                      className="rounded"
+                    />
+                    <span>Keyed only</span>
+                  </label>
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={showUnmapped}
+                      onChange={(e) => setShowUnmapped(e.target.checked)}
+                      className="rounded"
+                    />
+                    <span>Include unmapped</span>
+                  </label>
+                  <label className="flex items-center gap-1 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={showReverse}
+                      onChange={(e) => setShowReverse(e.target.checked)}
+                      className="rounded"
+                    />
+                    <span>Include reverse</span>
+                  </label>
+                </div>
+              </div>
+            )}
+            {filteredFindings.length === 0 ? (
               <p className="text-sm text-gray-500">결과가 없습니다. 입력을 준비하고 Run Diff를 눌러주세요.</p>
             ) : (
-              <div className="overflow-auto">
-                <table className="min-w-full text-sm">
-                  <thead>
-                    <tr className="bg-gray-100 text-gray-600">
-                      <th className="text-left p-2">Severity</th>
-                      <th className="text-left p-2">Category</th>
-                      <th className="text-left p-2">Description</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sortedFindings.map((f) => (
-                      <tr key={f.id} className="border-t">
-                        <td className="p-2 font-medium">{f.severity}</td>
-                        <td className="p-2 text-gray-700">{f.category}</td>
-                        <td className="p-2 text-gray-800">{f.description}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="space-y-4 max-h-[600px] overflow-y-auto">
+                {Object.entries(groupedFindings).map(([key, group]) => (
+                  <div key={key} className="border border-gray-200 rounded-lg p-4 bg-gray-50">
+                    {/* Requirement Card Header */}
+                    <div className="mb-3 pb-2 border-b border-gray-300">
+                      <h3 className="font-semibold text-base text-gray-800">
+                        Spec: {group.specTitle}
+                      </h3>
+                    </div>
+                    
+                    {/* Findings in Card */}
+                    <div className="space-y-2">
+                      {group.findings.map((f) => {
+                        // Phase 1: Context 필드 추출
+                        const specText = (f as any).specSideEvidence?.spec_text || 
+                                        (f as any).evidence?.expected || 
+                                        (f as any).evidence?.specItem?.text;
+                        const figmaText = (f as any).figmaSideEvidence?.figma_text || 
+                                         (f as any).evidence?.found || 
+                                         (f as any).evidence?.figmaText ||
+                                         (f as any).evidence?.figmaNode?.text;
+                        const specPath = (f as any).specSideEvidence?.spec_section || 
+                                        (f as any).requirement || 
+                                        (f as any).meta?.section;
+                        const figmaPath = (f as any).figmaSideEvidence?.figma_frame_path || 
+                                         (f as any).evidence?.figmaNode?.path ||
+                                         (f as any).evidence?.scope;
+                        const diffType = (f as any).diffType || 
+                                        (f.category === 'MISSING_ELEMENT' ? 'MISSING' : 
+                                         f.category === 'TEXT_MISMATCH' ? 'MISMATCH' : 'UNKNOWN');
+                        
+                        return (
+                          <div key={f.id} className="bg-white rounded p-3 border-l-4" style={{
+                            borderColor: diffType === 'MISSING' ? '#dc2626' :
+                                       diffType === 'MISMATCH' ? '#ea580c' :
+                                       diffType === 'CHANGED' ? '#ea580c' :
+                                       diffType === 'EXTRA' ? '#ca8a04' : '#6b7280'
+                          }}>
+                            {/* Diff Type Badge */}
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className="text-xs font-bold px-2 py-0.5 rounded" style={{
+                                backgroundColor: diffType === 'MISSING' ? '#fee2e2' :
+                                               diffType === 'MISMATCH' ? '#fed7aa' :
+                                               diffType === 'CHANGED' ? '#fed7aa' :
+                                               diffType === 'EXTRA' ? '#fef3c7' : '#f3f4f6',
+                                color: diffType === 'MISSING' ? '#991b1b' :
+                                       diffType === 'MISMATCH' ? '#9a3412' :
+                                       diffType === 'CHANGED' ? '#9a3412' :
+                                       diffType === 'EXTRA' ? '#854d0e' : '#374151'
+                              }}>
+                                [{diffType}]
+                              </span>
+                              <span className="text-xs text-gray-500">{f.severity}</span>
+                            </div>
+                            
+                            {/* Spec vs Figma 비교 */}
+                            <div className="space-y-1 text-sm">
+                              {figmaText && (
+                                <div className="flex items-start gap-2">
+                                  <span className="text-gray-600 min-w-[60px]">Figma:</span>
+                                  <span className="text-gray-800 flex-1">{figmaText}</span>
+                                </div>
+                              )}
+                              {specText && (
+                                <div className="flex items-start gap-2">
+                                  <span className="text-gray-600 min-w-[60px]">Spec:</span>
+                                  <span className={`flex-1 ${figmaText && specText !== figmaText ? 'text-orange-700 font-semibold' : 'text-gray-800'}`}>
+                                    {specText || '없음'}
+                                  </span>
+                                </div>
+                              )}
+                              {figmaPath && (
+                                <div className="flex items-start gap-2 text-xs text-gray-500 mt-1">
+                                  <span>↳</span>
+                                  <span>Figma path: {figmaPath}</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
             )}
           </div>
+
+          {/* (3) Raw (Debug 패널에서만 표시) */}
+          {showDebug && (
+            <div className="bg-white rounded-2xl shadow p-4 overflow-hidden">
+              <h2 className="font-semibold mb-3">④ Raw (Debug)</h2>
+              {findings.length === 0 ? (
+                <p className="text-sm text-gray-500">결과가 없습니다.</p>
+              ) : (
+                <div className="overflow-auto max-h-[400px]">
+                  <pre className="text-xs bg-gray-50 p-4 rounded-lg overflow-auto">
+                    {JSON.stringify(findings, null, 2)}
+                  </pre>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="bg-white rounded-2xl shadow p-4">
             <h2 className="font-semibold mb-2">④ Next</h2>
