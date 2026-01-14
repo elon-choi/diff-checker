@@ -10,6 +10,7 @@ import type { SpecItem } from '../../../../../packages/core-engine/src/types';
 import { extractSpecItemsFromTables } from '../../../lib/table-parser';
 import { isNoiseSpecItem, isNoise } from '../../../lib/noise-filter';
 import { extractSelectorKeyFromText, removeSelectorKeyFromText, normalizeKey } from '../../../../../packages/core-engine/src/utils/selector-key';
+import { LLMAdapter } from '../../../../../packages/adapters/llm-adapter/src/index';
 
 // 업데이트 날짜 패턴: "Update date: 25.12.10", "업데이트: 25.12.10", "(Update date: 25.12.10)" 등
 const UPDATE_DATE_PATTERNS = [
@@ -112,7 +113,7 @@ function parseLineForUpdates(line: string): { text: string; isDeprecated: boolea
   return { text, isDeprecated, isUpdated, updateDate };
 }
 
-function deriveSpecItemsFromMarkdown(specText: string): SpecItem[] {
+async function deriveSpecItemsFromMarkdown(specText: string): Promise<SpecItem[]> {
   const items: SpecItem[] = [];
   
   // Phase-2: 섹션 경로 추적을 위한 스택
@@ -130,7 +131,7 @@ function deriveSpecItemsFromMarkdown(specText: string): SpecItem[] {
     try {
       console.log('[DEBUG] 표 파싱 시작, HTML 길이:', specText.length);
       console.log('[DEBUG] HTML 샘플 (처음 1000자):', specText.substring(0, 1000));
-      const tableItems = extractSpecItemsFromTables(specText);
+      const tableItems = await extractSpecItemsFromTables(specText);
       console.log('[DEBUG] 표에서 추출된 SpecItem 수:', tableItems.length);
       
       // Phase-2: 표 항목에 selectorKey와 sectionPath 추가
@@ -229,7 +230,6 @@ function deriveSpecItemsFromMarkdown(specText: string): SpecItem[] {
           // 헌장 필드 추가 (optional, 기존 동작 유지)
           intent: `UI 텍스트 "${text}"가 화면에 표시되어야 함`,
           expected: text,
-          type: 'UI_TEXT' as any, // 기존 kind 필드와 호환
           conditions: parsed.isUpdated ? { 
             isUpdated: true, 
             updateDate: parsed.updateDate,
@@ -298,7 +298,6 @@ function deriveSpecItemsFromMarkdown(specText: string): SpecItem[] {
           // 헌장 필드 추가 (optional, 기존 동작 유지)
           intent: `UI 텍스트 "${textWithoutKey}"가 화면에 표시되어야 함`,
           expected: textWithoutKey,
-          type: 'UI_TEXT' as any,
           conditions: parsed.isUpdated ? { 
             isUpdated: true, 
             updateDate: parsed.updateDate,
@@ -378,7 +377,26 @@ export async function POST(req: Request) {
     console.log('- 표 포함 여부:', specContent.includes('<table'));
     console.log('- specContent 처음 500자:', specContent.substring(0, 500));
     
-    const specItems = specContent ? deriveSpecItemsFromMarkdown(specContent) : [];
+    let specItems = specContent ? await deriveSpecItemsFromMarkdown(specContent) : [];
+    const initialSpecItemsCount = specItems.length;
+    
+    // LLM 기반 SpecItem 검증 (선택적, 불확실한 항목만)
+    const llmSpecValidationEnabled = process.env.LLM_SPEC_VALIDATION_ENABLED === 'true';
+    let llmValidationUsed = false;
+    let llmValidatedCount = 0;
+    
+    if (llmSpecValidationEnabled && specItems.length > 0) {
+      try {
+        console.log('[DEBUG] LLM 기반 SpecItem 검증 시작...');
+        const beforeCount = specItems.length;
+        specItems = await LLMAdapter.validateSpecItems(specItems, specContent || '');
+        llmValidatedCount = beforeCount - specItems.length;
+        llmValidationUsed = true;
+        console.log('[DEBUG] LLM 검증 후 SpecItem 수:', specItems.length, `(${llmValidatedCount}개 제외)`);
+      } catch (error) {
+        console.warn('[DEBUG] LLM 검증 실패, 원본 SpecItem 사용:', error);
+      }
+    }
     
     // 디버깅: 표 파싱 결과 확인
     const hasTable = specContent?.includes('<table') || false;
@@ -460,6 +478,12 @@ export async function POST(req: Request) {
         total: filteredFindings.length,
         filtered: findings.length - filteredFindings.length,
         specItemsCount: validSpecItems.length,
+        llmValidation: {
+          enabled: llmSpecValidationEnabled,
+          used: llmValidationUsed,
+          initialCount: initialSpecItemsCount,
+          filteredCount: llmValidatedCount,
+        },
       },
       specItems: validSpecItems.map(item => ({
         id: item.id,

@@ -1,0 +1,57 @@
+# 표 파서 설정 파일
+# 다양한 요구사항 문서 형식의 표 헤더를 유연하게 인식하기 위한 설정
+
+# 표 헤더 키워드 정의
+# 각 필드에 매핑될 수 있는 키워드 목록
+headerKeywords:
+  # 번호/구분 컬럼
+  no:
+    - "no"
+    - "번호"
+    - "구분"
+    - "순번"
+    - "index"
+  
+  # 항목/요소 컬럼
+  item:
+    - "항목"
+    - "요소"
+    - "item"
+    - "element"
+    - "구분"
+  
+  # 속성 컬럼
+  attribute:
+    - "속성"
+    - "attribute"
+    - "type"
+    - "타입"
+  
+  # 내용 컬럼
+  content:
+    - "내용"
+    - "content"
+    - "text"
+    - "텍스트"
+    - "문구"
+  
+  # 비고/참고 컬럼
+  note:
+    - "비고"
+    - "참고"
+    - "note"
+    - "reference"
+    - "remark"
+    - "번역키"
+    - "translation"
+
+# 헤더 감지 설정
+detection:
+  # 최소 매칭 키워드 수 (이 개수 이상이면 헤더로 인식)
+  minMatchedKeywords: 3
+  
+  # 매칭 방식: "exact" (정확히 일치) 또는 "includes" (포함 관계)
+  matchMode: "includes"
+  
+  # 첫 번째 행을 헤더로 사용할지 여부 (헤더를 찾지 못한 경우)
+  useFirstRowAsHeader: true

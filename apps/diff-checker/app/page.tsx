@@ -53,6 +53,7 @@ export default function Page() {
   const [findings, setFindings] = useState<Finding[]>([]);
   const [specItemsCount, setSpecItemsCount] = useState<number>(0); // API에서 받은 SpecItem 개수
   const [running, setRunning] = useState(false);
+  const [llmValidationEnabled, setLlmValidationEnabled] = useState(false); // LLM 검증 활성화 상태
   // Phase-2: 필터 토글
   const [showKeyedOnly, setShowKeyedOnly] = useState(false);
   const [showUnmapped, setShowUnmapped] = useState(true);
@@ -365,6 +366,7 @@ export default function Page() {
       }
       setFindings(data.findings || []);
       setSpecItemsCount(data.summary?.specItemsCount || 0); // SpecItem 개수 저장
+      setLlmValidationEnabled(data.summary?.llmValidation?.used || false); // LLM 검증 사용 여부
     } catch (e: any) {
       alert(e?.message ?? 'failed');
     } finally {
@@ -1301,6 +1303,12 @@ export default function Page() {
           {/* (1) Summary - Phase 1 개선 */}
           <div className="bg-white rounded-2xl shadow p-4">
             <h2 className="font-semibold mb-3">② Summary</h2>
+            {llmValidationEnabled && (
+              <div className="mb-3 p-2 bg-green-50 border border-green-200 rounded text-xs">
+                <span className="font-medium text-green-800">✓ LLM 기반 SpecItem 검증 사용됨</span>
+                <p className="text-green-700 mt-1">불확실한 항목이 LLM으로 검증되어 번역키나 메타데이터가 자동으로 필터링되었습니다.</p>
+              </div>
+            )}
             <div className="space-y-4">
               {/* 요구사항 기준 Summary */}
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
@@ -1411,9 +1419,33 @@ export default function Page() {
                         const figmaPath = (f as any).figmaSideEvidence?.figma_frame_path || 
                                          (f as any).evidence?.figmaNode?.path ||
                                          (f as any).evidence?.scope;
-                        const diffType = (f as any).diffType || 
-                                        (f.category === 'MISSING_ELEMENT' ? 'MISSING' : 
-                                         f.category === 'TEXT_MISMATCH' ? 'MISMATCH' : 'UNKNOWN');
+                        // diffType 추론: 원본 diffType이 있으면 사용, 없으면 category와 evidence 기반으로 추론
+                        let diffType = (f as any).diffType;
+                        if (!diffType) {
+                          if (f.category === 'MISSING_ELEMENT') {
+                            // Spec에 있지만 Figma에 없으면 MISSING, Figma에 있지만 Spec에 없으면 EXTRA
+                            diffType = (f as any).figmaSideEvidence?.figma_text && !(f as any).specSideEvidence?.spec_text ? 'EXTRA' : 'MISSING';
+                          } else if (f.category === 'TEXT_MISMATCH') {
+                            diffType = 'MISMATCH';
+                          } else if (f.category === 'VISIBILITY') {
+                            diffType = 'CHANGED';
+                          } else if (f.category === 'POLICY') {
+                            diffType = 'MISSING';
+                          } else if (f.category === 'STRUCTURE') {
+                            diffType = 'UNMAPPED';
+                          } else {
+                            // 기본값: evidence를 기반으로 추론
+                            if ((f as any).evidence?.figmaText && !(f as any).evidence?.expected) {
+                              diffType = 'EXTRA';
+                            } else if ((f as any).evidence?.expected && !(f as any).evidence?.found) {
+                              diffType = 'MISSING';
+                            } else if ((f as any).evidence?.expected && (f as any).evidence?.found) {
+                              diffType = 'MISMATCH';
+                            } else {
+                              diffType = 'UNMAPPED';
+                            }
+                          }
+                        }
                         
                         return (
                           <div key={f.id} className="bg-white rounded p-3 border-l-4" style={{

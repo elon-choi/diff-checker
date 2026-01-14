@@ -1,6 +1,6 @@
 export type Platform = 'SPEC' | 'FIGMA' | 'WEB' | 'ANDROID' | 'IOS';
 export type Phase = 1 | 2 | 3 | 4;
-export type Severity = 'CRITICAL' | 'MAJOR' | 'MINOR' | 'INFO';
+export type Severity = 'CRITICAL' | 'MAJOR' | 'MINOR' | 'INFO' | 'WARN';
 export type Category = 'TEXT_MISMATCH' | 'MISSING_ELEMENT' | 'VISIBILITY' | 'POLICY' | 'STRUCTURE';
 
 export interface Finding {

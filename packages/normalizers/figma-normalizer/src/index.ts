@@ -114,6 +114,23 @@ export const FigmaNormalizer = {
           return;
         }
 
+        // 빈 텍스트 또는 공백만 있는 텍스트 제외
+        const trimmedText = node.characters.trim();
+        if (!trimmedText || trimmedText.length === 0) {
+          return;
+        }
+
+        // 텍스트 노드 크기가 매우 작은 경우 제외 (화면에 보이지 않는 텍스트)
+        // 예: 18 Hug x 13 Hug 같은 경우
+        if (node.absoluteBoundingBox) {
+          const width = node.absoluteBoundingBox.width || 0;
+          const height = node.absoluteBoundingBox.height || 0;
+          // 너비나 높이가 10px 미만이면 제외 (실제로 보이지 않는 텍스트)
+          if (width < 10 && height < 10) {
+            return;
+          }
+        }
+
         // 디자이너 가이드 텍스트 제외 (QA 기준)
         if (isDesignerGuideText(node.characters)) {
           return;

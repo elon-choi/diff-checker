@@ -57,6 +57,15 @@ export function isNoise(text: string): boolean {
     return true;
   }
   
+  // 번역키 패턴 제외 (예: "more_myinfo_account_delete_precautions_important_case_1")
+  // 언더스코어로 구분된 소문자/숫자 문자열 (2개 이상의 언더스코어 구분자)
+  if (/^[a-z0-9_]+$/.test(trimmed) && (trimmed.match(/_/g) || []).length >= 2) {
+    // 단, 너무 짧은 경우(10자 미만)는 실제 UI 텍스트일 수 있으므로 제외하지 않음
+    if (trimmed.length >= 10) {
+      return true;
+    }
+  }
+  
   // UI 레이블이 아닌 일반 텍스트 (너무 긴 문장)
   if (trimmed.length > 50 && !trimmed.includes('"')) {
     return true;

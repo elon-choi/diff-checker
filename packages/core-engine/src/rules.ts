@@ -1,5 +1,6 @@
-import { DiffFinding, SpecItem, UUMDocument } from './types';
+import { DiffFinding, SpecItem, UUMDocument, UUMNode } from './types';
 import { DiffRule } from './diff-engine';
+import { LLMAdapter } from '../../../adapters/llm-adapter/src/index';
 
 function normalizeText(value?: string): string {
   return (value ?? '')
@@ -593,6 +594,25 @@ export const policyRule: DiffRule = {
           description: `정책 관련 항목 확인 필요: "${item.text ?? item.id}"`,
           evidence: { item, checkedDocs: nonSpecDocs.map((d) => d.platform) },
           relatedSpecId: item.id,
+          diffType: 'MISSING',
+          requirement: item.sectionPath,
+          meta: {
+            ...item.meta,
+            ruleName: 'policy.basic',
+            ruleReason: `정책 관련 항목 "${item.text ?? item.id}"이(가) Figma/Web/앱에 존재하지 않음`,
+            recommendedAction: 'design-update' as const,
+          },
+          specSideEvidence: {
+            spec_section: item.meta?.section,
+            spec_row: item.meta?.row,
+            spec_feature: item.meta?.feature,
+            spec_text: item.text,
+          },
+          decisionMetadata: {
+            rule_name: 'policy.basic',
+            decision_reason_code: 'SPEC_CONFIRMED_MISSING',
+            decision_explanation: `정책 관련 항목 "${item.text ?? item.id}"이(가) Spec에 정의되어 있지만 Figma/Web/앱에 존재하지 않습니다.`,
+          },
         });
       }
     }
@@ -681,6 +701,16 @@ export const reverseComparisonRule: DiffRule = {
       const figmaText = figmaNode.text; // characters만 사용 (name 제외)
       if (!figmaText || figmaText.trim().length < 2) continue;
 
+      // 텍스트 노드 크기가 매우 작은 경우 제외 (화면에 보이지 않는 텍스트)
+      if (figmaNode.bounds) {
+        const width = figmaNode.bounds.w || 0;
+        const height = figmaNode.bounds.h || 0;
+        // 너비나 높이가 10px 미만이면 제외 (실제로 보이지 않는 텍스트)
+        if (width < 10 && height < 10) {
+          continue;
+        }
+      }
+
       const normalizedFigmaText = normalizeText(figmaText);
 
       // 너무 짧거나 일반적인 단어는 제외
@@ -729,6 +759,41 @@ export const reverseComparisonRule: DiffRule = {
         'text',
       ];
       if (figmaInternalLabels.includes(normalizedFigmaText)) continue;
+
+      // 디자인 문서 설명 텍스트 제외 (as-is/to-be, 수정 전/후 등)
+      const designDocumentLabels = [
+        '수정전',
+        '수정후',
+        '수정 전',
+        '수정 후',
+        'asis',
+        'tobe',
+        'as-is',
+        'to-be',
+        'as is',
+        'to be',
+        'before',
+        'after',
+        '변경전',
+        '변경후',
+        '변경 전',
+        '변경 후',
+        '개선전',
+        '개선후',
+        '개선 전',
+        '개선 후',
+      ];
+      if (designDocumentLabels.includes(normalizedFigmaText) || 
+          normalizedFigmaText.includes('수정전') || 
+          normalizedFigmaText.includes('수정후') ||
+          normalizedFigmaText.includes('수정 전') ||
+          normalizedFigmaText.includes('수정 후') ||
+          normalizedFigmaText.includes('as-is') ||
+          normalizedFigmaText.includes('to-be') ||
+          normalizedFigmaText.includes('asis') ||
+          normalizedFigmaText.includes('tobe')) {
+        continue;
+      }
 
       // 색상 코드 제외
       if (/^#[0-9a-f]{3,6}$/i.test(figmaText)) continue;

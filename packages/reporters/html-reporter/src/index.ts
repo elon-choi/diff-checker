@@ -154,8 +154,8 @@ export function toHtml(findings: DiffFinding[], phase: number): string {
       const specItem = f.evidence?.specItem;
       const specText = specItem?.text || f.evidence?.expected || f.meta?.section || '';
       const candidates = f.evidence?.candidates || [];
-      const ruleName = f.meta?.ruleName || 'unknown';
-      const ruleReason = f.meta?.ruleReason || '';
+      const ruleName = f.meta?.ruleName || f.decisionMetadata?.rule_name || 'unknown';
+      const ruleReason = f.meta?.ruleReason || f.decisionMetadata?.decision_explanation || '';
       const action = f.meta?.recommendedAction;
       
       return `
