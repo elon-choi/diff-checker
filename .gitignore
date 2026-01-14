@@ -8,3 +8,4 @@ node_modules/
 dist/
 build/
 *.log
+apps/diff-checker/.env.local
