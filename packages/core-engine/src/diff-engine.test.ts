@@ -90,6 +90,10 @@ describe('DiffEngine', () => {
     const engine = new DiffEngine([textStrictRule], mockLLM);
     const specItems: SpecItem[] = [
       { id: '1', kind: 'TEXT', text: '로그인' },
+      { id: '2', kind: 'TEXT', text: '회원가입' },
+      { id: '3', kind: 'TEXT', text: '아이디 찾기' },
+      { id: '4', kind: 'TEXT', text: '비밀번호 재설정' },
+      { id: '5', kind: 'TEXT', text: '확인' },
     ];
 
     const findings = await engine.runPhase(

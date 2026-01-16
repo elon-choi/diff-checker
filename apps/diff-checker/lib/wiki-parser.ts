@@ -41,6 +41,28 @@ export function parseWikiSections(html: string): WikiSection[] {
   const sections: WikiSection[] = [];
   const stack: WikiSection[] = [];
 
+  // 첫 번째 헤딩 이전의 콘텐츠도 섹션으로 보존
+  const firstHeading = headings[0];
+  const preambleRange = doc.createRange();
+  preambleRange.setStartBefore(contentArea.firstChild || contentArea);
+  preambleRange.setEndBefore(firstHeading);
+  const preambleContainer = doc.createElement('div');
+  preambleContainer.appendChild(preambleRange.cloneContents());
+  const preambleHtml = preambleContainer.innerHTML.trim();
+  if (preambleHtml) {
+    const preambleText = extractTextFromHtml(preambleHtml);
+    if (preambleText) {
+      sections.push({
+        id: 'section-preamble',
+        level: 0,
+        title: '서두',
+        html: preambleHtml,
+        text: preambleText,
+        children: [],
+      });
+    }
+  }
+
   headings.forEach((heading, index) => {
     const level = parseInt(heading.tagName.substring(1));
     const title = heading.textContent?.trim() || '';

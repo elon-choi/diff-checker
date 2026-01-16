@@ -391,6 +391,67 @@ async function validateSpecItemWithLLM(
   return { isValid: true, confidence: 0.5, reason: 'LLM 검증 실패, 기본값 사용' };
 }
 
+async function extractSpecTextsWithLLM(
+  content: string,
+  config: LLMConfig
+): Promise<string[]> {
+  if (!config.enabled || !config.apiKey || config.provider === 'none') {
+    return [];
+  }
+
+  const excerpt = content.length > 12000 ? `${content.slice(0, 12000)}\n\n[문서가 너무 길어 일부만 제공됨]` : content;
+
+  const prompt = `다음 문서에서 실제 UI 화면에 표시되는 텍스트만 추출해주세요.
+
+대상:
+- 버튼/라벨/탭/메뉴/옵션/필터/토글/체크박스 문구
+- 안내 문구/에러 메시지/설명 텍스트
+- 표의 "내용" 컬럼에 있는 실제 표시 문구
+- "문구 :", "표시 문구 :", "to-be :" 뒤의 문장
+
+제외:
+- 배포 예정일, 담당자, Jira, 목차, 문서 메타
+- 표 헤더(구분/요소/속성/내용/비고)
+- UI 요소 타입(Text, Button, Check Box 등)
+- 번역키, 내부 식별자, URL, 이미지 설명
+- as-is 문장(변경 전) 단독 텍스트
+
+규칙:
+- 중복 제거
+- 길이 2~100자만 반환
+- 결과는 JSON만 반환
+
+응답 형식:
+{"items":["문구1","문구2"]}
+
+문서:
+${excerpt}`;
+
+  try {
+    let responseText: string;
+
+    if (config.provider === 'openai') {
+      responseText = await callOpenAI(config.apiKey, config.model || 'gpt-4o-mini', prompt);
+    } else if (config.provider === 'anthropic') {
+      responseText = await callAnthropic(config.apiKey, config.model || 'claude-3-haiku-20240307', prompt);
+    } else {
+      return [];
+    }
+
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (parsed.items && Array.isArray(parsed.items)) {
+        return parsed.items.filter((item: any) => typeof item === 'string').map((item: string) => item.trim()).filter(Boolean);
+      }
+    }
+  } catch (error) {
+    console.warn('LLM 스펙 텍스트 추출 실패:', error);
+  }
+
+  return [];
+}
+
 export const LLMAdapter = {
   async refine(
     findings: DiffFinding[],
@@ -513,6 +574,25 @@ export const LLMAdapter = {
     return validatedItems;
   },
 
+  async extractSpecTexts(
+    specContent: string
+  ): Promise<string[]> {
+    const provider = (process.env.LLM_PROVIDER || 'none') as LLMProvider;
+    const apiKey = process.env.LLM_API_KEY;
+    const model = process.env.LLM_MODEL;
+    const enabled = process.env.LLM_ENABLED === 'true';
+    const specExtractionEnabled = process.env.LLM_SPEC_EXTRACTION_ENABLED === 'true';
+
+    const config: LLMConfig = {
+      provider: provider !== 'none' ? provider : undefined,
+      apiKey,
+      model,
+      enabled: enabled && !!apiKey && specExtractionEnabled,
+    };
+
+    return extractSpecTextsWithLLM(specContent, config);
+  },
+
   async compareSpecWithFigma(
     specItem: SpecItem,
     figmaNode: UUMNode,
@@ -569,6 +649,8 @@ export const LLMAdapter = {
 3. 존댓말 차이 허용: "확인" = "확인하세요" = "확인해주세요"
 4. 약어 허용: "인기순" = "인기 순위"
 5. 동의어 구분: "삭제" ≠ "제거" (의미가 다를 수 있음)
+6. UI 요소 타입 단어 무시: "버튼", "텍스트", "체크박스", "라벨", "옵션" 등은 비교 대상에서 제거하고 핵심 라벨만 비교
+   - 예: "탈퇴 버튼" vs "탈퇴"는 SEMANTIC으로 동일하게 처리
 
 **비교 기준:**
 - EXACT: 완전히 동일

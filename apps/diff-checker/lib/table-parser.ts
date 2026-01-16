@@ -84,11 +84,239 @@ export interface TableRow {
   [key: string]: string | undefined;
 }
 
+export interface UpdateHistoryInfo {
+  latestDate?: string; // YYYY-MM-DD
+  latestDateRaw?: string;
+  latestSource?: string;
+  tableIndex?: number;
+}
+
+type ParseTableOptions = {
+  skipUpdateHistory?: boolean;
+};
+
+type ParseTableResult = {
+  rows: TableRow[];
+  updateHistory?: UpdateHistoryInfo;
+};
+
+const UPDATE_HISTORY_HEADER_KEYWORDS = {
+  date: ['날짜', '일시', '변경날짜', '수정일자', 'date', 'update date', 'revision date'],
+  content: ['내용', '변경', '변경사항', 'update', 'history', 'revision', 'change'],
+  version: ['rev', 'ver', 'version', '버전'],
+  location: ['위치', 'page', '관련', '링크', '담당자', '작성자'],
+};
+
+function isUpdateHistoryTable(headers: string[]): boolean {
+  const normalizedHeaders = headers.map((h) => h.toLowerCase());
+  const hasDate = UPDATE_HISTORY_HEADER_KEYWORDS.date.some((kw) =>
+    normalizedHeaders.some((h) => h.includes(kw))
+  );
+  const hasContent = UPDATE_HISTORY_HEADER_KEYWORDS.content.some((kw) =>
+    normalizedHeaders.some((h) => h.includes(kw))
+  );
+  const hasVersion = UPDATE_HISTORY_HEADER_KEYWORDS.version.some((kw) =>
+    normalizedHeaders.some((h) => h.includes(kw))
+  );
+  const hasLocation = UPDATE_HISTORY_HEADER_KEYWORDS.location.some((kw) =>
+    normalizedHeaders.some((h) => h.includes(kw))
+  );
+  return hasDate && (hasContent || hasVersion || hasLocation);
+}
+
+function countUpdateHistoryHeaderMatches(cellTexts: string[]): number {
+  const normalized = cellTexts.map((text) => text.toLowerCase());
+  let count = 0;
+  if (UPDATE_HISTORY_HEADER_KEYWORDS.date.some((kw) => normalized.some((h) => h.includes(kw)))) count += 1;
+  if (UPDATE_HISTORY_HEADER_KEYWORDS.content.some((kw) => normalized.some((h) => h.includes(kw)))) count += 1;
+  if (UPDATE_HISTORY_HEADER_KEYWORDS.version.some((kw) => normalized.some((h) => h.includes(kw)))) count += 1;
+  if (UPDATE_HISTORY_HEADER_KEYWORDS.location.some((kw) => normalized.some((h) => h.includes(kw)))) count += 1;
+  return count;
+}
+
+function normalizeDate(year: number, month: number, day: number): string | undefined {
+  if (month < 1 || month > 12 || day < 1 || day > 31) return;
+  const mm = String(month).padStart(2, '0');
+  const dd = String(day).padStart(2, '0');
+  return `${year}-${mm}-${dd}`;
+}
+
+function parseDateFromText(text: string, fallbackYear?: number): string | undefined {
+  const trimmed = text.trim();
+  let match = trimmed.match(/(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일/);
+  if (match) return normalizeDate(Number(match[1]), Number(match[2]), Number(match[3]));
+  match = trimmed.match(/(\d{4})[./-](\d{1,2})[./-](\d{1,2})/);
+  if (match) return normalizeDate(Number(match[1]), Number(match[2]), Number(match[3]));
+  match = trimmed.match(/(\d{2})[./-](\d{1,2})[./-](\d{1,2})/);
+  if (match) return normalizeDate(2000 + Number(match[1]), Number(match[2]), Number(match[3]));
+  match = trimmed.match(/(\d{1,2})[./-](\d{1,2})/);
+  if (match && fallbackYear) return normalizeDate(fallbackYear, Number(match[1]), Number(match[2]));
+  return;
+}
+
+function extractDateTextFromCell($cell: cheerio.Cheerio<cheerio.Element>): string {
+  const timeEl = $cell.find('time[datetime]').first();
+  const datetime = timeEl.attr('datetime')?.trim();
+  if (datetime) return datetime;
+  return $cell.text().trim();
+}
+
+function extractLatestDateFromHistoryTable(
+  $: cheerio.CheerioAPI,
+  $table: cheerio.Cheerio<cheerio.Element>,
+  headers: string[],
+  headerRowIndex: number
+): { latestDate?: string; latestDateRaw?: string } {
+  let latestDate: string | undefined;
+  let latestDateRaw: string | undefined;
+  const dateHeaderIndex = headers.findIndex((header) =>
+    UPDATE_HISTORY_HEADER_KEYWORDS.date.some((kw) => header.includes(kw))
+  );
+  if (dateHeaderIndex === -1) return {};
+  const rows = $table.find('tr');
+  rows.each((rowIndex, row) => {
+    if (rowIndex <= headerRowIndex) return;
+    const cells = $(row).find('td, th');
+    const dateCell = cells.eq(dateHeaderIndex);
+    if (!dateCell || dateCell.length === 0) return;
+    const text = extractDateTextFromCell(dateCell);
+    const normalized = parseDateFromText(text);
+    if (normalized) {
+      if (!latestDate || normalized > latestDate) {
+        latestDate = normalized;
+        latestDateRaw = text;
+      }
+    }
+  });
+  return { latestDate, latestDateRaw };
+}
+
+function extractLatestDateFromTableByDateColumn(
+  $: cheerio.CheerioAPI,
+  $table: cheerio.Cheerio<cheerio.Element>
+): { latestDate?: string; latestDateRaw?: string } {
+  const columnStats = new Map<number, { count: number; latestDate?: string; latestDateRaw?: string }>();
+  const rows = $table.find('tr');
+  rows.each((_rowIndex, row) => {
+    const cells = $(row).find('td, th');
+    cells.each((cellIndex, cell) => {
+      const text = extractDateTextFromCell($(cell));
+      const normalizedDate = parseDateFromText(text);
+      if (!normalizedDate) return;
+      const stat = columnStats.get(cellIndex) || { count: 0 };
+      stat.count += 1;
+      if (!stat.latestDate || normalizedDate > stat.latestDate) {
+        stat.latestDate = normalizedDate;
+        stat.latestDateRaw = text;
+      }
+      columnStats.set(cellIndex, stat);
+    });
+  });
+  let bestColumn: { count: number; latestDate?: string; latestDateRaw?: string } | undefined;
+  for (const stat of columnStats.values()) {
+    if (stat.count >= 2 && (!bestColumn || (stat.latestDate && stat.latestDate > (bestColumn.latestDate || '')))) {
+      bestColumn = stat;
+    }
+  }
+  return { latestDate: bestColumn?.latestDate, latestDateRaw: bestColumn?.latestDateRaw };
+}
+
+function extractPatternTextsFromHtml(html: string): string[] {
+  const patterns = [
+    /문구\s*:\s*([^\n<]{1,200}?)(?=\s*<|\s*<br\s*\/?>|\s*문구\s*:|표시\s*문구\s*:|as-is\s*:|to-be\s*:|$|\n)/g,
+    /표시\s*문구\s*:\s*([^\n<]{1,200}?)(?=\s*<|\s*<br\s*\/?>|\s*문구\s*:|표시\s*문구\s*:|as-is\s*:|to-be\s*:|$|\n)/g,
+    /as-is\s*:\s*([^\n<]{1,200}?)(?=\s*<|\s*<br\s*\/?>|\s*문구\s*:|표시\s*문구\s*:|as-is\s*:|to-be\s*:|$|\n)/g,
+    /to-be\s*:\s*([^\n<]{1,200}?)(?=\s*<|\s*<br\s*\/?>|\s*문구\s*:|표시\s*문구\s*:|as-is\s*:|to-be\s*:|$|\n)/g,
+  ];
+  const texts = new Set<string>();
+  patterns.forEach((pattern) => {
+    const matches = [...html.matchAll(pattern)];
+    matches.forEach((match) => {
+      let text = match[1]?.trim();
+      if (!text) return;
+      text = text.replace(/<[^>]+>/g, '').trim();
+      text = text.replace(/<ac:[^>]+>.*?<\/ac:[^>]+>/g, '').trim();
+      text = text.replace(/%\{[^}]+\}/g, '').trim();
+      text = text.replace(/\s+/g, ' ').trim();
+      if (text.length > 100) {
+        const sentenceMatch = text.match(/^.{1,100}[.!?]/);
+        if (sentenceMatch) {
+          text = sentenceMatch[0].trim();
+        } else {
+          const words = text.substring(0, 100).split(/\s+/);
+          words.pop();
+          text = words.join(' ').trim();
+        }
+      }
+      if (text && text.length >= 2 && text.length <= 100 && !shouldExclude(text)) {
+        texts.add(text);
+      }
+    });
+  });
+  return Array.from(texts);
+}
+
+export function extractLatestDateFromHtmlContent(html: string): { latestDate?: string; latestDateRaw?: string } {
+  const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  const dateCandidates: Array<{ date: string; raw: string }> = [];
+
+  const fullDatePatterns = [
+    /(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일/g,
+    /(\d{4})[./-](\d{1,2})[./-](\d{1,2})/g,
+  ];
+
+  fullDatePatterns.forEach((pattern) => {
+    const matches = [...text.matchAll(pattern)];
+    matches.forEach((match) => {
+      const normalized = parseDateFromText(match[0]);
+      if (normalized) {
+        dateCandidates.push({ date: normalized, raw: match[0] });
+      }
+    });
+  });
+
+  const datetimeAttrMatches = [...html.matchAll(/datetime="([^"]+)"/gi)];
+  datetimeAttrMatches.forEach((match) => {
+    const raw = match[1]?.trim();
+    if (!raw) return;
+    const normalized = parseDateFromText(raw);
+    if (normalized) {
+      dateCandidates.push({ date: normalized, raw });
+    }
+  });
+
+  const latestYear = dateCandidates.reduce((year, candidate) => {
+    const match = candidate.date.match(/^(\d{4})-/);
+    const candidateYear = match ? Number(match[1]) : undefined;
+    if (!candidateYear) return year;
+    return !year || candidateYear > year ? candidateYear : year;
+  }, undefined as number | undefined);
+
+  if (latestYear) {
+    const updateLabelMatches = [...text.matchAll(/(\d{1,2})[./-](\d{1,2})\s*업데이트/g)];
+    updateLabelMatches.forEach((match) => {
+      const normalized = parseDateFromText(match[0], latestYear);
+      if (normalized) {
+        dateCandidates.push({ date: normalized, raw: match[0] });
+      }
+    });
+  }
+
+  if (dateCandidates.length === 0) return {};
+  const latest = dateCandidates.reduce((acc, current) => {
+    if (!acc || current.date > acc.date) return current;
+    return acc;
+  }, undefined as { date: string; raw: string } | undefined);
+
+  return latest ? { latestDate: latest.date, latestDateRaw: latest.raw } : {};
+}
+
 /**
  * HTML 표를 파싱하여 행 데이터 추출
  */
-export async function parseTable(html: string): Promise<TableRow[]> {
+export async function parseTable(html: string, options: ParseTableOptions = {}): Promise<ParseTableResult> {
   const rows: TableRow[] = [];
+  const updateHistory: UpdateHistoryInfo = {};
   
   // 서버 사이드에서는 cheerio로 파싱
   if (typeof window === 'undefined') {
@@ -121,12 +349,13 @@ export async function parseTable(html: string): Promise<TableRow[]> {
       
       if (tables.length === 0) {
         console.warn('[DEBUG] parseTable: 표를 찾을 수 없습니다.');
-        return [];
+        return { rows: [] };
       }
       
-      // 중복 표 제거: ac:local-id를 사용하여 동일한 표 필터링
-      const processedTableIds = new Set<string>();
-      const uniqueTables: cheerio.Element[] = [];
+      // 중복 표 제거: 동일 ac:local-id일 때는 "가장 정보량이 많은" 표를 선택
+      const processedContentKeys = new Set<string>();
+      const uniqueTables: Array<{ table: cheerio.Element; index: number }> = [];
+      const bestByLocalId = new Map<string, { table: cheerio.Element; score: number; index: number }>();
       
       // cheerio의 each는 return false로 중단할 수 없으므로 배열로 변환 후 처리
       const tableArray: cheerio.Element[] = [];
@@ -136,20 +365,51 @@ export async function parseTable(html: string): Promise<TableRow[]> {
       
       console.log(`[DEBUG] parseTable: 배열로 변환된 표 수: ${tableArray.length}`);
       
+      const getTableScore = ($table: cheerio.Cheerio<cheerio.Element>): number => {
+        const text = $table.text().replace(/\s+/g, ' ').trim();
+        const textLength = text.length;
+        const rowCount = $table.find('tr').length;
+        const cellCount = $table.find('td, th').length;
+        
+        let headerKeywordMatches = 0;
+        const matchedKeywords = new Set<string>();
+        $table.find('tr').slice(0, 3).each((_rowIndex, row) => {
+          const $row = $(row);
+          const cells = $row.find('td, th');
+          const cellTexts: string[] = [];
+          cells.each((_, cell) => {
+            const $cell = $(cell).clone();
+            $cell.find('ac\\:structured-macro, ac\\:inline-comment-marker, ac\\:image, script, style').remove();
+            const text = $cell.text().trim().toLowerCase();
+            if (text) cellTexts.push(text);
+          });
+          allKeywords.forEach((keyword) => {
+            const normalizedKeyword = keyword.toLowerCase();
+            if (cellTexts.some((cellText) => cellText.includes(normalizedKeyword))) {
+              matchedKeywords.add(normalizedKeyword);
+            }
+          });
+        });
+        headerKeywordMatches = matchedKeywords.size;
+        
+        return headerKeywordMatches * 100000 + rowCount * 1000 + cellCount * 10 + textLength;
+      };
+      
       for (let i = 0; i < tableArray.length; i++) {
         const table = tableArray[i];
         const $table = $(table);
         
-        // 1. ac:local-id가 있는 경우: 그것만 사용하여 중복 체크
+        // 1. ac:local-id가 있는 경우: 동일 ID 중 가장 점수가 높은 표만 유지
         const localId = $table.attr('ac:local-id');
         if (localId) {
-          if (processedTableIds.has(localId)) {
-            console.log(`[DEBUG] parseTable: 표 ${i + 1}/${tableArray.length} 중복 건너뛰기 (ac:local-id: ${localId})`);
-            continue;
+          const score = getTableScore($table);
+          const existing = bestByLocalId.get(localId);
+          if (!existing || score > existing.score) {
+            bestByLocalId.set(localId, { table, score, index: i });
+            console.log(`[DEBUG] parseTable: 표 ${i + 1}/${tableArray.length} 후보 갱신 (ac:local-id: ${localId}, score: ${score})`);
+          } else {
+            console.log(`[DEBUG] parseTable: 표 ${i + 1}/${tableArray.length} 중복 제외 (ac:local-id: ${localId}, score: ${score})`);
           }
-          processedTableIds.add(localId);
-          uniqueTables.push(table);
-          console.log(`[DEBUG] parseTable: 표 ${i + 1}/${tableArray.length} 고유 표 추가 (ac:local-id: ${localId})`);
           continue;
         }
         
@@ -158,21 +418,28 @@ export async function parseTable(html: string): Promise<TableRow[]> {
         if (firstRowText) {
           const tableHash = firstRowText.replace(/\s+/g, ' ').toLowerCase();
           const contentKey = `content:${tableHash}`;
-          if (processedTableIds.has(contentKey)) {
+          if (processedContentKeys.has(contentKey)) {
             console.log(`[DEBUG] parseTable: 표 ${i + 1}/${tableArray.length} 중복 건너뛰기 (내용 기반: ${firstRowText.substring(0, 50)}...)`);
             continue;
           }
-          processedTableIds.add(contentKey);
+          processedContentKeys.add(contentKey);
         }
         
-        uniqueTables.push(table);
+        uniqueTables.push({ table, index: i });
         console.log(`[DEBUG] parseTable: 표 ${i + 1}/${tableArray.length} 고유 표 추가 (내용 기반)`);
       }
       
-      console.log(`[DEBUG] parseTable: 중복 제거 후 고유 표 수: ${uniqueTables.length} (원본: ${tableArray.length})`);
-      console.log(`[DEBUG] parseTable: 처리된 ac:local-id 목록:`, Array.from(processedTableIds));
+      const localIdTables = Array.from(bestByLocalId.values())
+        .sort((a, b) => a.index - b.index)
+        .map(({ table, index }) => ({ table, index }));
       
-      uniqueTables.forEach((table, tableIndex) => {
+      const mergedTables = [...uniqueTables, ...localIdTables].sort((a, b) => a.index - b.index);
+      const mergedTableElements = mergedTables.map(({ table }) => table);
+      
+      console.log(`[DEBUG] parseTable: 중복 제거 후 고유 표 수: ${mergedTableElements.length} (원본: ${tableArray.length})`);
+      console.log(`[DEBUG] parseTable: 유지된 ac:local-id 목록:`, Array.from(bestByLocalId.keys()));
+      
+      mergedTableElements.forEach((table, tableIndex) => {
         const $table = $(table);
         const tableRows = $table.find('tr');
         
@@ -197,11 +464,6 @@ export async function parseTable(html: string): Promise<TableRow[]> {
             return; // 제목 행은 건너뛰기
           }
           
-          // 헤더 행은 최소 3개 이상의 셀을 가져야 함
-          if (cells.length < 3) {
-            return;
-          }
-          
           const cellTexts: string[] = [];
           cells.each((_, cell) => {
             // Confluence 매크로 제거하고 텍스트만 추출
@@ -210,6 +472,19 @@ export async function parseTable(html: string): Promise<TableRow[]> {
             const text = $cell.text().trim().toLowerCase();
             cellTexts.push(text);
           });
+
+          const updateHeaderMatches = countUpdateHistoryHeaderMatches(cellTexts);
+          if (updateHeaderMatches >= 2 && headerRowIndex === -1) {
+            headerRowIndex = rowIndex;
+            headers.push(...cellTexts);
+            console.log(`[DEBUG] parseTable: 표 ${tableIndex + 1}의 업데이트 히스토리 헤더 행 발견 (행 ${rowIndex + 1}):`, headers);
+            return false; // break .each loop
+          }
+          
+          // 일반 요구사항 표 헤더는 최소 3개 이상의 셀을 가져야 함
+          if (cells.length < 3) {
+            return;
+          }
           
           // 헤더 키워드 확인: 설정 파일의 키워드 목록 사용 (미리 로드된 allKeywords 사용)
           const foundKeywords = allKeywords.filter(keyword => 
@@ -240,6 +515,41 @@ export async function parseTable(html: string): Promise<TableRow[]> {
             headers.push(text || '');
           });
           headerRowIndex = 0;
+        }
+        
+        // 업데이트 히스토리 표 감지 및 최신 날짜 추출
+        const isHistoryTable = isUpdateHistoryTable(headers);
+        if (isHistoryTable) {
+          const { latestDate, latestDateRaw } = extractLatestDateFromHistoryTable(
+            $,
+            $table,
+            headers,
+            headerRowIndex
+          );
+          if (latestDate && (!updateHistory.latestDate || latestDate > updateHistory.latestDate)) {
+            updateHistory.latestDate = latestDate;
+            updateHistory.latestDateRaw = latestDateRaw;
+            updateHistory.latestSource = 'update-history-table';
+            updateHistory.tableIndex = tableIndex;
+          }
+          if (options.skipUpdateHistory !== false) {
+            console.log(`[DEBUG] parseTable: 표 ${tableIndex + 1}는 업데이트 히스토리 표로 간주되어 스킵합니다.`);
+            return;
+          }
+        }
+
+        if (!isHistoryTable && !updateHistory.latestDate) {
+          const { latestDate, latestDateRaw } = extractLatestDateFromTableByDateColumn($, $table);
+          if (latestDate) {
+            updateHistory.latestDate = latestDate;
+            updateHistory.latestDateRaw = latestDateRaw;
+            updateHistory.latestSource = 'date-column-fallback';
+            updateHistory.tableIndex = tableIndex;
+            if (options.skipUpdateHistory !== false) {
+              console.log(`[DEBUG] parseTable: 표 ${tableIndex + 1}는 날짜 컬럼 기준 히스토리 표로 간주되어 스킵합니다.`);
+              return;
+            }
+          }
         }
         
         // 데이터 행 파싱 (헤더 행 다음부터)
@@ -328,7 +638,7 @@ export async function parseTable(html: string): Promise<TableRow[]> {
       } else {
         console.warn('[DEBUG] parseTable: 파싱된 행이 없습니다. 표 구조를 확인하세요.');
       }
-      return rows;
+      return { rows, updateHistory: updateHistory.latestDate ? updateHistory : undefined };
     } catch (e) {
       console.error('[DEBUG] parseTable: cheerio 파싱 실패:', e);
       if (e instanceof Error) {
@@ -339,7 +649,7 @@ export async function parseTable(html: string): Promise<TableRow[]> {
     
     // 폴백: 정규식 기반 파싱
     const tableMatch = html.match(/<table[^>]*>([\s\S]*?)<\/table>/gi);
-    if (!tableMatch) return [];
+    if (!tableMatch) return { rows: [] };
     
     for (const tableHtml of tableMatch) {
       // 헤더 행 찾기
@@ -405,7 +715,7 @@ export async function parseTable(html: string): Promise<TableRow[]> {
       }
     }
     
-    return rows;
+    return { rows };
   }
 
   // 브라우저 환경에서는 DOMParser 사용
@@ -463,7 +773,7 @@ export async function parseTable(html: string): Promise<TableRow[]> {
     }
   });
 
-  return rows;
+  return { rows };
 }
 
 /**
@@ -505,23 +815,54 @@ function shouldExclude(text: string): boolean {
   return false;
 }
 
+function extractUpdateDateFromText(text: string, fallbackYear?: number): string | undefined {
+  if (!text) return;
+  const hasUpdateKeyword = /(업데이트|update|release|변경|수정|revision|history|ver\.|version|rev\.|rev\b)/i.test(text);
+  const normalizedDate = parseDateFromText(text, fallbackYear);
+  if (!normalizedDate || !hasUpdateKeyword) return;
+  return normalizedDate;
+}
+
+function getYearFromDate(date?: string): number | undefined {
+  if (!date) return;
+  const match = date.match(/^(\d{4})-/);
+  return match ? Number(match[1]) : undefined;
+}
+
+function filterItemsByLatestDate(items: SpecItem[], latestDate?: string): SpecItem[] {
+  if (!latestDate) return items;
+  return items.filter((item) => {
+    const updateDate = item.meta?.updateDate;
+    if (!updateDate) return true;
+    return updateDate >= latestDate;
+  });
+}
+
 /**
  * 표 행을 SpecItem으로 변환
  */
-export function tableRowsToSpecItems(rows: TableRow[]): SpecItem[] {
+type TableRowsToSpecItemsOptions = {
+  latestHistoryDate?: string;
+};
+
+export function tableRowsToSpecItems(rows: TableRow[], options: TableRowsToSpecItemsOptions = {}): SpecItem[] {
   const items: SpecItem[] = [];
   const extractedTexts = new Set<string>(); // 중복 제거용
+  const latestHistoryYear = getYearFromDate(options.latestHistoryDate);
   
   rows.forEach((row, index) => {
-    // 비고 컬럼은 제외
-    if (row.note) return;
-    
     // 항목과 내용이 모두 있어야 유효한 요구사항
     const item = row.item?.trim();
     const content = row.content?.trim();
     const attribute = row.attribute?.trim();
     
     if (!item && !content) return;
+    
+    // 행 단위 업데이트 날짜 추출
+    const rowUpdateDate = extractUpdateDateFromText(
+      [item, content, attribute, row.contentHtml].filter(Boolean).join(' '),
+      latestHistoryYear
+    );
     
     // 내용 컬럼에서 UI 텍스트 추출
     if (content) {
@@ -537,6 +878,9 @@ export function tableRowsToSpecItems(rows: TableRow[]): SpecItem[] {
       ];
       
       textPatterns.forEach(({ name, pattern }, pIndex) => {
+        if (name === 'as-is') {
+          return;
+        }
         // 원본 HTML에서 패턴 매칭 (HTML 태그가 구분자 역할)
         const matches = [...contentHtml.matchAll(pattern)];
         matches.forEach((match, mIndex) => {
@@ -593,6 +937,7 @@ export function tableRowsToSpecItems(rows: TableRow[]): SpecItem[] {
                 item: item,
                 attribute: attribute,
                 column: 'content',
+                ...(rowUpdateDate ? { isUpdated: true, updateDate: rowUpdateDate } : {}),
               },
               meta: {
                 section: item || '표',
@@ -600,6 +945,7 @@ export function tableRowsToSpecItems(rows: TableRow[]): SpecItem[] {
                 feature: item || text.substring(0, 20),
                 source: 'table',
                 column: 'content',
+                ...(rowUpdateDate ? { isUpdated: true, updateDate: rowUpdateDate } : {}),
               },
             });
           }
@@ -631,6 +977,7 @@ export function tableRowsToSpecItems(rows: TableRow[]): SpecItem[] {
                 item: item,
                 attribute: attribute,
                 column: 'content',
+                ...(rowUpdateDate ? { isUpdated: true, updateDate: rowUpdateDate } : {}),
               },
               meta: {
                 section: item || '표',
@@ -638,6 +985,7 @@ export function tableRowsToSpecItems(rows: TableRow[]): SpecItem[] {
                 feature: item || text.substring(0, 20),
                 source: 'table',
                 column: 'content',
+                ...(rowUpdateDate ? { isUpdated: true, updateDate: rowUpdateDate } : {}),
               },
             });
           }
@@ -687,6 +1035,7 @@ export function tableRowsToSpecItems(rows: TableRow[]): SpecItem[] {
                   item: item,
                   attribute: attribute,
                   column: 'content',
+                  ...(rowUpdateDate ? { isUpdated: true, updateDate: rowUpdateDate } : {}),
                 },
                 meta: {
                   section: item || '표',
@@ -694,6 +1043,7 @@ export function tableRowsToSpecItems(rows: TableRow[]): SpecItem[] {
                   feature: item || finalText.substring(0, 20),
                   source: 'table',
                   column: 'content',
+                  ...(rowUpdateDate ? { isUpdated: true, updateDate: rowUpdateDate } : {}),
                 },
               });
             }
@@ -719,6 +1069,7 @@ export function tableRowsToSpecItems(rows: TableRow[]): SpecItem[] {
                 source: 'table',
                 attribute: attribute,
                 column: 'item',
+                ...(rowUpdateDate ? { isUpdated: true, updateDate: rowUpdateDate } : {}),
               },
               meta: {
                 section: item || '표',
@@ -726,6 +1077,7 @@ export function tableRowsToSpecItems(rows: TableRow[]): SpecItem[] {
                 feature: text.substring(0, 20),
                 source: 'table',
                 column: 'item',
+                ...(rowUpdateDate ? { isUpdated: true, updateDate: rowUpdateDate } : {}),
               },
             });
           }
@@ -744,24 +1096,59 @@ export function tableRowsToSpecItems(rows: TableRow[]): SpecItem[] {
 /**
  * HTML에서 표를 찾아 SpecItem으로 변환
  */
-export async function extractSpecItemsFromTables(html: string): Promise<SpecItem[]> {
+export async function extractSpecItemsFromTables(html: string): Promise<{ items: SpecItem[]; updateHistory?: UpdateHistoryInfo }> {
   try {
     console.log('[DEBUG] extractSpecItemsFromTables 시작, HTML 길이:', html.length);
-    const rows = await parseTable(html);
+    const { rows, updateHistory } = await parseTable(html, { skipUpdateHistory: true });
+    let derivedUpdateHistory = updateHistory;
+    if (!derivedUpdateHistory?.latestDate) {
+      const fallback = extractLatestDateFromHtmlContent(html);
+      if (fallback.latestDate) {
+        derivedUpdateHistory = {
+          latestDate: fallback.latestDate,
+          latestDateRaw: fallback.latestDateRaw,
+          latestSource: 'update-history-text-fallback',
+        };
+      }
+    }
     console.log('[DEBUG] parseTable 결과 행 수:', rows.length);
     if (rows.length > 0) {
       console.log('[DEBUG] 첫 번째 행 예시:', JSON.stringify(rows[0], null, 2));
     } else {
       console.warn('[DEBUG] extractSpecItemsFromTables: 파싱된 행이 없습니다.');
     }
-    const items = tableRowsToSpecItems(rows);
-    console.log('[DEBUG] tableRowsToSpecItems 결과 항목 수:', items.length);
-    if (items.length > 0) {
+    const items = tableRowsToSpecItems(rows, { latestHistoryDate: derivedUpdateHistory?.latestDate });
+    let filteredItems = filterItemsByLatestDate(items, derivedUpdateHistory?.latestDate);
+    if (filteredItems.length === 0) {
+      const fallbackTexts = extractPatternTextsFromHtml(html);
+      if (fallbackTexts.length > 0) {
+        filteredItems = fallbackTexts.map((text, index) => ({
+          id: `table-fallback-${index}`,
+          kind: 'TEXT',
+          text,
+          intent: `문서에서 추출된 UI 텍스트 "${text}"가 화면에 표시되어야 함`,
+          expected: text,
+          conditions: {
+            source: 'table',
+            column: 'content',
+          },
+          meta: {
+            section: '문서',
+            row: index + 1,
+            feature: text.substring(0, 20),
+            source: 'table',
+            column: 'content',
+          },
+        }));
+      }
+    }
+    console.log('[DEBUG] tableRowsToSpecItems 결과 항목 수:', filteredItems.length);
+    if (filteredItems.length > 0) {
       console.log('[DEBUG] 첫 번째 SpecItem 예시:', JSON.stringify({
-        id: items[0].id,
-        text: items[0].text?.substring(0, 50),
-        source: items[0].meta?.source,
-        column: items[0].meta?.column,
+        id: filteredItems[0].id,
+        text: filteredItems[0].text?.substring(0, 50),
+        source: filteredItems[0].meta?.source,
+        column: filteredItems[0].meta?.column,
       }, null, 2));
     } else {
       console.warn('[DEBUG] extractSpecItemsFromTables: 추출된 SpecItem이 없습니다.');
@@ -777,7 +1164,7 @@ export async function extractSpecItemsFromTables(html: string): Promise<SpecItem
         });
       }
     }
-    return items;
+    return { items: filteredItems, updateHistory: derivedUpdateHistory };
   } catch (e) {
     console.error('[DEBUG] extractSpecItemsFromTables 에러:', e);
     throw e;

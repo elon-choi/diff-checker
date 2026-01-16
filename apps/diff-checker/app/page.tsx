@@ -9,8 +9,213 @@ type Category = 'TEXT_MISMATCH' | 'MISSING_ELEMENT' | 'VISIBILITY' | 'POLICY' | 
 
 type SpecInputMode = 'text' | 'wiki' | 'file';
 
+// 브라우저 콘솔에서 실행할 Web DOM 추출 스크립트
+// 사용법:
+// 1. 전체 페이지: extractWebDOM()
+// 2. 특정 요소: extractWebDOM(document.querySelector('#main-content'))
+// 3. 개발자 도구에서 요소 선택 후: $0을 사용하여 extractWebDOM($0)
+const WEB_DOM_EXTRACTION_SCRIPT = `(function() {
+  function extractWebDOM(rootElement) {
+    // rootElement가 없으면 document.body 사용
+    const root = rootElement || document.body;
+    
+    function getPath(el, rootEl) {
+      if (el === rootEl) return rootEl === document.body ? '/html/body' : '/root';
+      const parts = [];
+      let node = el;
+      while (node && node !== rootEl && node !== document.body) {
+        const tag = node.tagName.toLowerCase();
+        const parent = node.parentElement;
+        if (!parent) break;
+        const siblings = Array.from(parent.children).filter(
+          (c) => c.tagName.toLowerCase() === tag
+        );
+        const index = siblings.length > 1 ? \`[\${siblings.indexOf(node) + 1}]\` : '';
+        parts.unshift(\`\${tag}\${index}\`);
+        node = parent;
+      }
+      const rootPath = rootEl === document.body ? '/html/body' : '/root';
+      return parts.length > 0 ? \`\${rootPath}/\${parts.join('/')}\` : rootPath;
+    }
+
+    function visible(el) {
+      const style = window.getComputedStyle(el);
+      const rect = el.getBoundingClientRect?.();
+      const hasSize = rect ? rect.width > 0 && rect.height > 0 : true;
+      return (
+        style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        hasSize
+      );
+    }
+
+    const nodes = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null);
+    let current = walker.currentNode;
+    while ((current = walker.nextNode())) {
+      const el = current;
+      const role = (el.getAttribute('role') || '').toLowerCase();
+      const tag = el.tagName.toLowerCase();
+      const name =
+        el.getAttribute('name') ||
+        el.getAttribute('aria-label') ||
+        el.getAttribute('id') ||
+        el.textContent?.trim()?.slice(0, 64);
+
+      const attrs = {};
+      for (const a of Array.from(el.attributes)) {
+        if (['class', 'style'].includes(a.name)) continue;
+        attrs[a.name] = a.value;
+      }
+
+      nodes.push({
+        role: role || undefined,
+        tag,
+        name: name || undefined,
+        textContent: el.textContent?.trim() || undefined,
+        path: getPath(el, root),
+        selector: getPath(el, root),
+        visible: visible(el),
+        attrs,
+      });
+    }
+
+    const result = {
+      title: document.title,
+      rootSelector: root === document.body ? 'body' : (root.id ? \`#\${root.id}\` : root.className ? \`.\${root.className.split(' ')[0]}\` : root.tagName.toLowerCase()),
+      nodes,
+    };
+    
+    console.log('Web DOM JSON 추출 완료:', result);
+    console.log(\`추출 범위: \${result.rootSelector}\`);
+    console.log(\`추출된 노드 수: \${nodes.length}개\`);
+    console.log('아래 JSON을 복사하여 Diff Checker에 붙여넣으세요:');
+    console.log(JSON.stringify(result, null, 2));
+    
+    // 클립보드에 복사
+    navigator.clipboard.writeText(JSON.stringify(result, null, 2)).then(() => {
+      console.log('✓ JSON이 클립보드에 복사되었습니다!');
+    }).catch(() => {
+      console.log('⚠️ 클립보드 복사 실패. 위의 JSON을 수동으로 복사하세요.');
+    });
+    
+    return result;
+  }
+  
+  // 전역 함수로 export (나중에 직접 호출 가능)
+  window.extractWebDOM = extractWebDOM;
+  
+  // 기본 실행: 전체 페이지 추출
+  console.log('💡 특정 영역만 추출하려면: extractWebDOM(document.querySelector(\'#your-id\'))');
+  return extractWebDOM();
+})();`;
+
+// 특정 요소 선택 버전 스크립트
+const WEB_DOM_EXTRACTION_SCRIPT_SELECTED = `(function() {
+  function extractWebDOM(rootElement) {
+    const root = rootElement || document.body;
+    
+    function getPath(el, rootEl) {
+      if (el === rootEl) return rootEl === document.body ? '/html/body' : '/root';
+      const parts = [];
+      let node = el;
+      while (node && node !== rootEl && node !== document.body) {
+        const tag = node.tagName.toLowerCase();
+        const parent = node.parentElement;
+        if (!parent) break;
+        const siblings = Array.from(parent.children).filter(
+          (c) => c.tagName.toLowerCase() === tag
+        );
+        const index = siblings.length > 1 ? \`[\${siblings.indexOf(node) + 1}]\` : '';
+        parts.unshift(\`\${tag}\${index}\`);
+        node = parent;
+      }
+      const rootPath = rootEl === document.body ? '/html/body' : '/root';
+      return parts.length > 0 ? \`\${rootPath}/\${parts.join('/')}\` : rootPath;
+    }
+
+    function visible(el) {
+      const style = window.getComputedStyle(el);
+      const rect = el.getBoundingClientRect?.();
+      const hasSize = rect ? rect.width > 0 && rect.height > 0 : true;
+      return (
+        style.display !== 'none' &&
+        style.visibility !== 'hidden' &&
+        hasSize
+      );
+    }
+
+    const nodes = [];
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, null);
+    let current = walker.currentNode;
+    while ((current = walker.nextNode())) {
+      const el = current;
+      const role = (el.getAttribute('role') || '').toLowerCase();
+      const tag = el.tagName.toLowerCase();
+      const name =
+        el.getAttribute('name') ||
+        el.getAttribute('aria-label') ||
+        el.getAttribute('id') ||
+        el.textContent?.trim()?.slice(0, 64);
+
+      const attrs = {};
+      for (const a of Array.from(el.attributes)) {
+        if (['class', 'style'].includes(a.name)) continue;
+        attrs[a.name] = a.value;
+      }
+
+      nodes.push({
+        role: role || undefined,
+        tag,
+        name: name || undefined,
+        textContent: el.textContent?.trim() || undefined,
+        path: getPath(el, root),
+        selector: getPath(el, root),
+        visible: visible(el),
+        attrs,
+      });
+    }
+
+    const result = {
+      title: document.title,
+      rootSelector: root === document.body ? 'body' : (root.id ? \`#\${root.id}\` : root.className ? \`.\${root.className.split(' ')[0]}\` : root.tagName.toLowerCase()),
+      nodes,
+    };
+    
+    console.log('Web DOM JSON 추출 완료:', result);
+    console.log(\`추출 범위: \${result.rootSelector}\`);
+    console.log(\`추출된 노드 수: \${nodes.length}개\`);
+    console.log('아래 JSON을 복사하여 Diff Checker에 붙여넣으세요:');
+    console.log(JSON.stringify(result, null, 2));
+    
+    navigator.clipboard.writeText(JSON.stringify(result, null, 2)).then(() => {
+      console.log('✓ JSON이 클립보드에 복사되었습니다!');
+    }).catch(() => {
+      console.log('⚠️ 클립보드 복사 실패. 위의 JSON을 수동으로 복사하세요.');
+    });
+    
+    return result;
+  }
+  
+  // 전역 함수로 export (나중에 직접 호출 가능)
+  window.extractWebDOM = extractWebDOM;
+  
+  // $0은 개발자 도구에서 선택한 요소
+  if (typeof $0 !== 'undefined' && $0) {
+    console.log('✓ 개발자 도구에서 선택한 요소를 기준으로 추출합니다.');
+    console.log('💡 다른 요소를 추출하려면: extractWebDOM(document.querySelector(\'#your-id\'))');
+    return extractWebDOM($0);
+  } else {
+    console.log('⚠️ 요소가 선택되지 않았습니다. 전체 페이지를 추출합니다.');
+    console.log('💡 특정 영역만 추출하려면:');
+    console.log('   1. 개발자 도구 Elements 탭에서 요소를 선택 (Inspector)');
+    console.log('   2. Console 탭에서 extractWebDOM($0) 실행');
+    console.log('   3. 또는 extractWebDOM(document.querySelector(\'#your-id\')) 실행');
+    return extractWebDOM();
+  }
+})();`;
+
 export default function Page() {
-  const [phase, setPhase] = useState<Phase>(1);
   const [specInputMode, setSpecInputMode] = useState<SpecInputMode>('text');
   const [specText, setSpecText] = useState('성인 등급은 이용이 제한됩니다\n확인 버튼 노출');
   const [specWikiUrl, setSpecWikiUrl] = useState<string>('');
@@ -46,13 +251,34 @@ export default function Page() {
   const [figmaToken, setFigmaToken] = useState<string>('');
   const [figmaLoading, setFigmaLoading] = useState(false);
   const [figmaInputMode, setFigmaInputMode] = useState<'api' | 'json' | 'file'>('json');
+  const [compareTargets, setCompareTargets] = useState({
+    figma: true,
+    web: false,
+    android: false,
+    ios: false,
+  });
+  
+  // Phase는 체크박스 선택에 따라 자동 계산
+  const phase = useMemo<Phase>(() => {
+    if (compareTargets.ios) return 4;
+    if (compareTargets.android) return 3;
+    if (compareTargets.web) return 2;
+    return 1; // Figma만 또는 아무것도 없으면 Phase 1
+  }, [compareTargets]);
+  
   const [webText, setWebText] = useState<string>('');
+  const [webInputMode, setWebInputMode] = useState<'console' | 'url'>('console');
+  const [webUrl, setWebUrl] = useState<string>('');
+  const [webLoading, setWebLoading] = useState(false);
   const [androidText, setAndroidText] = useState<string>('');
   const [iosText, setIosText] = useState<string>('');
 
   const [findings, setFindings] = useState<Finding[]>([]);
   const [specItemsCount, setSpecItemsCount] = useState<number>(0); // API에서 받은 SpecItem 개수
+  const [specBaselineDate, setSpecBaselineDate] = useState<string | null>(null);
+  const [specBaselineSource, setSpecBaselineSource] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const [hasRun, setHasRun] = useState(false);
   const [llmValidationEnabled, setLlmValidationEnabled] = useState(false); // LLM 검증 활성화 상태
   // Phase-2: 필터 토글
   const [showKeyedOnly, setShowKeyedOnly] = useState(false);
@@ -311,20 +537,51 @@ export default function Page() {
   async function onRun() {
     setRunning(true);
     try {
+      const selectedTargets = Object.entries(compareTargets)
+        .filter(([, enabled]) => enabled)
+        .map(([key]) => key);
+      if (selectedTargets.length === 0) {
+        alert('비교 대상을 하나 이상 선택해주세요.');
+        return;
+      }
+      if (compareTargets.figma && !figmaText.trim()) {
+        alert('비교 대상(Figma JSON)이 없습니다. Figma 파일을 업로드하거나 JSON을 추가해주세요.');
+        return;
+      }
+      if (compareTargets.web && !webText.trim()) {
+        alert('비교 대상(Web JSON)이 없습니다. Web 구현 데이터를 입력해주세요.');
+        return;
+      }
+      if (compareTargets.android && !androidText.trim()) {
+        alert('비교 대상(Android JSON)이 없습니다. Android 구현 데이터를 입력해주세요.');
+        return;
+      }
+      if (compareTargets.ios && !iosText.trim()) {
+        alert('비교 대상(iOS JSON)이 없습니다. iOS 구현 데이터를 입력해주세요.');
+        return;
+      }
       // 선택된 섹션이 있으면 해당 내용 전달
       let specContent = specText;
       let isHtml = false;
+      let specBaselineHtml: string | undefined;
+      let specBaselineText: string | undefined;
       
       if (selectedSections.length > 0) {
         // 위키 HTML인 경우
         if (specWikiSelectedHtml) {
           specContent = specWikiSelectedHtml;
           isHtml = true;
+          if (specWikiHtml) {
+            specBaselineHtml = specWikiHtml;
+          }
         }
         // PDF 텍스트인 경우
         else if (pdfSelectedText) {
           specContent = pdfSelectedText;
           isHtml = false;
+          if (pdfRawText) {
+            specBaselineText = pdfRawText;
+          }
         }
       } else {
         // 선택된 섹션이 없으면 원본 사용
@@ -349,10 +606,12 @@ export default function Page() {
           phase,
           specText: specContent,
           specHtml: isHtml ? specContent : undefined,
-          figmaJson: parseJSON(figmaText),
-          webJson: parseJSON(webText),
-          androidJson: parseJSON(androidText),
-          iosJson: parseJSON(iosText),
+          specBaselineHtml,
+          specBaselineText,
+          figmaJson: compareTargets.figma ? parseJSON(figmaText) : undefined,
+          webJson: compareTargets.web ? parseJSON(webText) : undefined,
+          androidJson: compareTargets.android ? parseJSON(androidText) : undefined,
+          iosJson: compareTargets.ios ? parseJSON(iosText) : undefined,
         }),
       });
       const data = await res.json();
@@ -367,11 +626,48 @@ export default function Page() {
       setFindings(data.findings || []);
       setSpecItemsCount(data.summary?.specItemsCount || 0); // SpecItem 개수 저장
       setLlmValidationEnabled(data.summary?.llmValidation?.used || false); // LLM 검증 사용 여부
+      setSpecBaselineDate(data.summary?.specBaseline?.date || null);
+      setSpecBaselineSource(data.summary?.specBaseline?.source || null);
+      setHasRun(true);
     } catch (e: any) {
       alert(e?.message ?? 'failed');
     } finally {
       setRunning(false);
     }
+  }
+
+  function onResetInputs() {
+    setSpecInputMode('text');
+    setSpecText('');
+    setSpecWikiUrl('');
+    setSpecWikiRawText('');
+    setSpecWikiHtml('');
+    setSpecWikiSelectedHtml('');
+    setWikiSections([]);
+    setSelectedSections([]);
+    setPdfRawText('');
+    setPdfSelectedText('');
+    setSpecFile(null);
+    setSpecLoading(false);
+    setFigmaText('');
+    setFigmaUrl('');
+    setFigmaInputMode('json');
+    setFigmaLoading(false);
+    setCompareTargets({
+      figma: true,
+      web: false,
+      android: false,
+      ios: false,
+    });
+    setWebText('');
+    setAndroidText('');
+    setIosText('');
+    setFindings([]);
+    setSpecItemsCount(0);
+    setSpecBaselineDate(null);
+    setSpecBaselineSource(null);
+    setHasRun(false);
+    setRunning(false);
   }
 
   function onExportMarkdown() {
@@ -464,6 +760,45 @@ export default function Page() {
     } finally {
       setFigmaLoading(false);
     }
+  }
+
+  async function handleWebFetch() {
+    if (!webUrl.trim()) {
+      alert('웹 페이지 URL을 입력해주세요.');
+      return;
+    }
+    
+    setWebLoading(true);
+    try {
+      const res = await fetch('/api/web/collect', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ url: webUrl }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.error || '웹 페이지를 가져오는데 실패했습니다.');
+      }
+      setWebText(JSON.stringify(data.json, null, 2));
+      alert(`웹 페이지를 성공적으로 가져왔습니다. (${data.count || 0}개 요소 추출)`);
+    } catch (e: any) {
+      alert(e?.message ?? '웹 페이지를 가져오는데 실패했습니다.');
+    } finally {
+      setWebLoading(false);
+    }
+  }
+
+  function copyWebScriptToClipboard(useSelected = false) {
+    const script = useSelected ? WEB_DOM_EXTRACTION_SCRIPT_SELECTED : WEB_DOM_EXTRACTION_SCRIPT;
+    const message = useSelected
+      ? '선택한 요소만 추출하는 스크립트가 클립보드에 복사되었습니다!\n\n1. 비교할 웹 페이지를 열고\n2. 개발자 도구(F12) → Elements 탭에서 비교할 영역을 선택 (Inspector)\n3. Console 탭으로 이동하여 붙여넣기(Cmd/Ctrl+V) 후 Enter\n4. 선택한 요소의 하위만 추출됩니다!'
+      : '전체 페이지 추출 스크립트가 클립보드에 복사되었습니다!\n\n1. 비교할 웹 페이지를 열고\n2. 개발자 도구(F12) → Console 탭에서\n3. 붙여넣기(Cmd/Ctrl+V) 후 Enter를 누르세요.';
+    
+    navigator.clipboard.writeText(script).then(() => {
+      alert(message);
+    }).catch(() => {
+      alert('클립보드 복사에 실패했습니다. 스크립트를 수동으로 복사하세요.');
+    });
   }
   
   function handleFigmaTokenClear() {
@@ -625,23 +960,19 @@ export default function Page() {
         <div className="mx-auto max-w-7xl px-4 py-3 flex items-center justify-between">
           <h1 className="text-[2.5rem] font-semibold tracking-tight">Spec Diff Checker</h1>
           <div className="flex items-center gap-3">
-            <label className="text-sm text-gray-600">Phase</label>
-            <select
-              value={phase}
-              onChange={(e) => setPhase(Number(e.target.value) as Phase)}
-              className="rounded-md border-gray-300 text-sm shadow-sm focus:ring-2 focus:ring-black/10"
-            >
-              <option value={1}>1: Spec ↔ Figma</option>
-              <option value={2}>2: + Web</option>
-              <option value={3}>3: + Android</option>
-              <option value={4}>4: + iOS</option>
-            </select>
             <button
               onClick={onRun}
               disabled={running}
               className="rounded-lg bg-black text-white px-4 py-2 text-sm shadow hover:bg-gray-900 disabled:opacity-50"
             >
               {running ? 'Running…' : 'Run Diff'}
+            </button>
+            <button
+              onClick={onResetInputs}
+              disabled={running}
+              className="rounded-lg border border-gray-300 px-3 py-2 text-sm shadow hover:bg-gray-50 disabled:opacity-50"
+            >
+              초기화
             </button>
             <div className="flex gap-2">
               <button
@@ -678,6 +1009,31 @@ export default function Page() {
           <div className="bg-white rounded-2xl shadow p-4">
             <h2 className="font-semibold mb-2">① Inputs</h2>
             <div className="grid grid-cols-1 gap-4">
+              <div>
+                <label className="block text-sm font-medium mb-2">비교 대상 선택</label>
+                <div className="flex flex-wrap gap-3 text-sm text-gray-700">
+                  {([
+                    ['figma', 'Figma'],
+                    ['web', 'Web'],
+                    ['android', 'Android'],
+                    ['ios', 'iOS'],
+                  ] as const).map(([key, label]) => (
+                    <label key={key} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={compareTargets[key]}
+                        onChange={() =>
+                          setCompareTargets((prev) => ({ ...prev, [key]: !prev[key] }))
+                        }
+                      />
+                      {label}
+                    </label>
+                  ))}
+                </div>
+                <p className="text-xs text-gray-500 mt-2">
+                  Figma 없이도 비교할 수 있지만, 결과 신뢰도는 낮아질 수 있습니다.
+                </p>
+              </div>
               <div>
                 <div className="flex items-center justify-between mb-2">
                   <label className="block text-sm font-medium">Spec 입력 방식</label>
@@ -1060,7 +1416,7 @@ export default function Page() {
                   </div>
                 )}
               </div>
-              <div>
+              <div className={`${compareTargets.figma ? '' : 'opacity-40 pointer-events-none'}`}>
                 <div className="flex items-center justify-between mb-2">
                   <label className="block text-sm font-medium">Figma 입력</label>
                   <div className="flex gap-2">
@@ -1069,7 +1425,7 @@ export default function Page() {
                       target="_blank"
                       rel="noopener noreferrer"
                       className="text-xs underline text-blue-600 hover:text-blue-800"
-                      title="Figma Plugin 사용 가이드 (API 한도 없음)"
+                      title="Figma Plugin 사용 가이드 (API 호출 없음)"
                     >
                       📖 Plugin 가이드
                     </a>
@@ -1079,31 +1435,34 @@ export default function Page() {
                 <div className="flex gap-2 mb-3">
                   <button
                     onClick={() => setFigmaInputMode('json')}
+                    disabled={!compareTargets.figma}
                     className={`px-3 py-1.5 text-xs rounded-md border ${
                       figmaInputMode === 'json'
                         ? 'bg-black text-white border-black'
                         : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
-                    }`}
+                    } disabled:opacity-50 disabled:cursor-not-allowed`}
                   >
                     JSON 직접 붙여넣기 (권장)
                   </button>
                   <button
                     onClick={() => setFigmaInputMode('file')}
+                    disabled={!compareTargets.figma}
                     className={`px-3 py-1.5 text-xs rounded-md border ${
                       figmaInputMode === 'file'
                         ? 'bg-black text-white border-black'
                         : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
-                    }`}
+                    } disabled:opacity-50 disabled:cursor-not-allowed`}
                   >
                     파일 업로드
                   </button>
                   <button
                     onClick={() => setFigmaInputMode('api')}
+                    disabled={!compareTargets.figma}
                     className={`px-3 py-1.5 text-xs rounded-md border ${
                       figmaInputMode === 'api'
                         ? 'bg-black text-white border-black'
                         : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
-                    }`}
+                    } disabled:opacity-50 disabled:cursor-not-allowed`}
                   >
                     API로 가져오기
                   </button>
@@ -1117,12 +1476,12 @@ export default function Page() {
                         <li>추출된 JSON 복사</li>
                         <li>아래 텍스트 영역에 붙여넣기 (Cmd/Ctrl + V)</li>
                       </ol>
-                      <p className="text-xs text-blue-600 mt-2">✅ API 한도 없음 | 무제한 사용 가능</p>
                     </div>
                     <textarea
-                      className="w-full min-h-[200px] rounded-lg border-gray-300 shadow-sm focus:ring-2 focus:ring-black/10 text-sm font-mono"
+                      className="w-full min-h-[200px] rounded-lg border-gray-300 shadow-sm focus:ring-2 focus:ring-black/10 text-sm font-mono disabled:opacity-50 disabled:cursor-not-allowed"
                       value={figmaText}
                       onChange={(e) => setFigmaText(e.target.value)}
+                      disabled={!compareTargets.figma}
                       placeholder='Figma JSON을 여기에 붙여넣으세요...
 
 예시:
@@ -1156,7 +1515,6 @@ export default function Page() {
                         <li>JSON을 파일로 저장 (.json 확장자)</li>
                         <li>아래에서 파일 선택</li>
                       </ol>
-                      <p className="text-xs text-blue-600 mt-2">✅ API 한도 없음 | 무제한 사용 가능</p>
                     </div>
                     <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center">
                       <input
@@ -1176,6 +1534,7 @@ export default function Page() {
                             reader.readAsText(file);
                           }
                         }}
+                        disabled={!compareTargets.figma}
                         className="hidden"
                         id="figma-file-input"
                       />
@@ -1198,9 +1557,10 @@ export default function Page() {
                       <div className="space-y-2">
                         <p className="text-xs text-green-600">✓ 파일이 로드되었습니다. 내용을 확인하거나 수정할 수 있습니다.</p>
                         <textarea
-                          className="w-full min-h-[200px] rounded-lg border-gray-300 shadow-sm focus:ring-2 focus:ring-black/10 text-sm font-mono"
+                          className="w-full min-h-[200px] rounded-lg border-gray-300 shadow-sm focus:ring-2 focus:ring-black/10 text-sm font-mono disabled:opacity-50 disabled:cursor-not-allowed"
                           value={figmaText}
                           onChange={(e) => setFigmaText(e.target.value)}
+                          disabled={!compareTargets.figma}
                           placeholder="JSON 내용이 여기에 표시됩니다..."
                         />
                       </div>
@@ -1211,30 +1571,33 @@ export default function Page() {
                     <div className="flex gap-2">
                       <input
                         type="text"
-                        className="flex-1 rounded-lg border-gray-300 shadow-sm focus:ring-2 focus:ring-black/10 text-sm px-3 py-2"
+                        className="flex-1 rounded-lg border-gray-300 shadow-sm focus:ring-2 focus:ring-black/10 text-sm px-3 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
                         value={figmaUrl}
                         onChange={(e) => setFigmaUrl(e.target.value)}
+                        disabled={!compareTargets.figma}
                         placeholder="Figma 파일 URL (https://www.figma.com/file/...)"
                       />
                       <input
                         type="password"
-                        className="w-48 rounded-lg border-gray-300 shadow-sm focus:ring-2 focus:ring-black/10 text-sm px-3 py-2"
+                        className="w-48 rounded-lg border-gray-300 shadow-sm focus:ring-2 focus:ring-black/10 text-sm px-3 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
                         value={figmaToken}
                         onChange={(e) => setFigmaToken(e.target.value)}
+                        disabled={!compareTargets.figma}
                         placeholder="Personal Access Token"
                       />
                       <button
                         onClick={handleFigmaFetch}
-                        disabled={figmaLoading}
+                        disabled={figmaLoading || !compareTargets.figma}
                         className="px-4 py-2 bg-black text-white text-sm rounded-lg hover:bg-gray-900 disabled:opacity-50 whitespace-nowrap"
                       >
                         {figmaLoading ? '가져오는 중...' : '가져오기'}
                       </button>
                     </div>
                     <textarea
-                      className="w-full min-h-[100px] rounded-lg border-gray-300 shadow-sm focus:ring-2 focus:ring-black/10 text-sm font-mono"
+                      className="w-full min-h-[100px] rounded-lg border-gray-300 shadow-sm focus:ring-2 focus:ring-black/10 text-sm font-mono disabled:opacity-50 disabled:cursor-not-allowed"
                       value={figmaText}
                       onChange={(e) => setFigmaText(e.target.value)}
+                      disabled={!compareTargets.figma}
                       placeholder='API로 가져온 JSON이 여기에 표시됩니다. 또는 직접 붙여넣을 수도 있습니다.'
                     />
                     <div className="text-xs text-gray-500 space-y-1">
@@ -1247,42 +1610,139 @@ export default function Page() {
                       {!figmaToken && (
                         <p className="text-gray-400">💡 토큰을 입력하면 자동으로 저장됩니다. 서버에 환경 변수(FIGMA_TOKEN)가 설정되어 있으면 기본값으로 사용됩니다.</p>
                       )}
-                      <p className="text-orange-600">⚠️ API 방식은 요청 한도 제한이 있을 수 있습니다. JSON 직접 붙여넣기를 권장합니다.</p>
+                      <p className="text-orange-600">⚠️ API 방식은 일일 호출 제한(예: 6회)이 있을 수 있습니다. JSON 직접 붙여넣기를 권장합니다.</p>
                     </div>
                   </div>
                 )}
               </div>
-              <div className={`${phase >= 2 ? '' : 'opacity-40 pointer-events-none'}`}>
-                <div className="flex items-center justify-between">
-                  <label className="block text-sm font-medium mb-1">Web DOM JSON (Paste) (Phase ≥ 2)</label>
+              <div className={`${compareTargets.web ? '' : 'opacity-40 pointer-events-none'}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <label className="block text-sm font-medium">Web DOM JSON</label>
                   <button onClick={() => pasteSample('web')} className="text-xs underline text-gray-600">샘플 붙여넣기</button>
                 </div>
-                <textarea
-                  className="w-full min-h-[100px] rounded-lg border-gray-300 shadow-sm focus:ring-2 focus:ring-black/10 text-sm"
-                  value={webText}
-                  onChange={(e) => setWebText(e.target.value)}
-                />
+                <div className="flex gap-2 mb-3">
+                  <button
+                    onClick={() => setWebInputMode('console')}
+                    disabled={!compareTargets.web}
+                    className={`px-3 py-1.5 text-xs rounded-md border ${
+                      webInputMode === 'console'
+                        ? 'bg-black text-white border-black'
+                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                    } disabled:opacity-50 disabled:cursor-not-allowed`}
+                  >
+                    브라우저 콘솔 (권장)
+                  </button>
+                  <button
+                    onClick={() => setWebInputMode('url')}
+                    disabled={!compareTargets.web}
+                    className={`px-3 py-1.5 text-xs rounded-md border ${
+                      webInputMode === 'url'
+                        ? 'bg-black text-white border-black'
+                        : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
+                    } disabled:opacity-50 disabled:cursor-not-allowed`}
+                  >
+                    URL 자동 수집
+                  </button>
+                </div>
+                {webInputMode === 'console' ? (
+                  <div className="space-y-2">
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 mb-2">
+                      <p className="text-xs text-blue-800 font-medium mb-1">💡 브라우저 콘솔 사용 방법:</p>
+                      <ol className="text-xs text-blue-700 list-decimal list-inside space-y-0.5 mb-2">
+                        <li>비교할 웹 페이지를 브라우저에서 엽니다</li>
+                        <li>개발자 도구(F12 또는 Cmd+Option+I)를 엽니다</li>
+                        <li>아래 버튼 중 하나를 선택하여 스크립트를 복사합니다</li>
+                        <li>Console 탭에서 붙여넣기(Cmd/Ctrl+V) 후 Enter를 누릅니다</li>
+                        <li>콘솔에 출력된 JSON을 복사하여 아래 텍스트 영역에 붙여넣습니다</li>
+                      </ol>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          onClick={() => copyWebScriptToClipboard(false)}
+                          disabled={!compareTargets.web}
+                          className="px-3 py-1.5 bg-blue-600 text-white text-xs rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="전체 페이지를 추출합니다"
+                        >
+                          📋 전체 페이지
+                        </button>
+                        <button
+                          onClick={() => copyWebScriptToClipboard(true)}
+                          disabled={!compareTargets.web}
+                          className="px-3 py-1.5 bg-green-600 text-white text-xs rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                          title="개발자 도구에서 선택한 요소만 추출합니다 (정확한 비교 범위 지정 가능)"
+                        >
+                          🎯 선택한 요소만
+                        </button>
+                      </div>
+                      <p className="text-xs text-blue-600 mt-2 font-medium">
+                        💡 <strong>정확한 비교 범위 지정:</strong> "선택한 요소만" 버튼을 사용하면 개발자 도구에서 특정 영역만 선택하여 추출할 수 있습니다.
+                      </p>
+                    </div>
+                    <textarea
+                      className="w-full min-h-[200px] rounded-lg border-gray-300 shadow-sm focus:ring-2 focus:ring-black/10 text-sm font-mono disabled:opacity-50 disabled:cursor-not-allowed"
+                      value={webText}
+                      onChange={(e) => setWebText(e.target.value)}
+                      disabled={!compareTargets.web}
+                      placeholder="브라우저 콘솔에서 추출한 Web DOM JSON을 여기에 붙여넣으세요..."
+                    />
+                    {webText && (
+                      <p className="text-xs text-green-600">✓ JSON이 입력되었습니다. Run Diff 버튼을 클릭하세요.</p>
+                    )}
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        className="flex-1 rounded-lg border-gray-300 shadow-sm focus:ring-2 focus:ring-black/10 text-sm px-3 py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                        value={webUrl}
+                        onChange={(e) => setWebUrl(e.target.value)}
+                        disabled={!compareTargets.web}
+                        placeholder="웹 페이지 URL (https://example.com)"
+                      />
+                      <button
+                        onClick={handleWebFetch}
+                        disabled={webLoading || !compareTargets.web}
+                        className="px-4 py-2 bg-black text-white text-sm rounded-lg hover:bg-gray-900 disabled:opacity-50 whitespace-nowrap"
+                      >
+                        {webLoading ? '수집 중...' : '자동 수집'}
+                      </button>
+                    </div>
+                    <textarea
+                      className="w-full min-h-[200px] rounded-lg border-gray-300 shadow-sm focus:ring-2 focus:ring-black/10 text-sm font-mono disabled:opacity-50 disabled:cursor-not-allowed"
+                      value={webText}
+                      onChange={(e) => setWebText(e.target.value)}
+                      disabled={!compareTargets.web}
+                      placeholder="URL 자동 수집으로 가져온 JSON이 여기에 표시됩니다. 또는 직접 붙여넣을 수도 있습니다."
+                    />
+                    <div className="text-xs text-gray-500 space-y-1">
+                      <p>💡 URL 자동 수집은 서버에서 Playwright를 사용하여 DOM을 추출합니다.</p>
+                      <p>⚠️ 로컬 개발 환경에서만 동작합니다. 프로덕션에서는 브라우저 콘솔 방식을 사용하세요.</p>
+                    </div>
+                  </div>
+                )}
               </div>
-              <div className={`${phase >= 3 ? '' : 'opacity-40 pointer-events-none'}`}>
+              <div className={`${compareTargets.android ? '' : 'opacity-40 pointer-events-none'}`}>
                 <div className="flex items-center justify-between">
-                  <label className="block text-sm font-medium mb-1">Android Dump JSON (Paste) (Phase ≥ 3)</label>
+                  <label className="block text-sm font-medium mb-1">Android Dump JSON (Paste)</label>
                   <button onClick={() => pasteSample('android')} className="text-xs underline text-gray-600">샘플 붙여넣기</button>
                 </div>
                 <textarea
                   className="w-full min-h-[100px] rounded-lg border-gray-300 shadow-sm focus:ring-2 focus:ring-black/10 text-sm"
                   value={androidText}
                   onChange={(e) => setAndroidText(e.target.value)}
+                  disabled={!compareTargets.android}
                 />
               </div>
-              <div className={`${phase >= 4 ? '' : 'opacity-40 pointer-events-none'}`}>
+              <div className={`${compareTargets.ios ? '' : 'opacity-40 pointer-events-none'}`}>
                 <div className="flex items-center justify-between">
-                  <label className="block text-sm font-medium mb-1">iOS Dump JSON (Paste) (Phase ≥ 4)</label>
+                  <label className="block text-sm font-medium mb-1">iOS Dump JSON (Paste)</label>
                   <button onClick={() => pasteSample('ios')} className="text-xs underline text-gray-600">샘플 붙여넣기</button>
                 </div>
                 <textarea
                   className="w-full min-h-[100px] rounded-lg border-gray-300 shadow-sm focus:ring-2 focus:ring-black/10 text-sm"
                   value={iosText}
                   onChange={(e) => setIosText(e.target.value)}
+                  disabled={!compareTargets.ios}
                 />
               </div>
             </div>
@@ -1309,6 +1769,21 @@ export default function Page() {
                 <p className="text-green-700 mt-1">불확실한 항목이 LLM으로 검증되어 번역키나 메타데이터가 자동으로 필터링되었습니다.</p>
               </div>
             )}
+            {hasRun && specBaselineDate ? (
+              <div className="mb-3 p-2 bg-gray-50 border border-gray-200 rounded text-xs">
+                <span className="font-medium text-gray-800">요구사항 기준일</span>
+                <div className="text-gray-700 mt-1">
+                  {specBaselineDate}{specBaselineSource ? ` (${specBaselineSource})` : ''}
+                </div>
+                <p className="text-gray-600 mt-1">변경 이력 표의 최신 날짜를 기준으로 최신 요구사항만 비교합니다.</p>
+              </div>
+            ) : hasRun ? (
+              <div className="mb-3 p-2 bg-gray-50 border border-gray-200 rounded text-xs">
+                <span className="font-medium text-gray-800">요구사항 기준일</span>
+                <div className="text-gray-700 mt-1">업데이트 히스토리 표가 없어 기준일을 표시할 수 없습니다.</div>
+                <p className="text-gray-600 mt-1">문서에 변경 이력 표가 포함되어 있다면 다시 실행해주세요.</p>
+              </div>
+            ) : null}
             <div className="space-y-4">
               {/* 요구사항 기준 Summary */}
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">

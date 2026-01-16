@@ -17,11 +17,11 @@ test.describe('UI 보호: Next.js 앱 메인 화면', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
     // 페이지 로드 대기
-    await page.waitForSelector('h1:has-text("Spec–Design–Implementation Diff Checker")');
+    await expect(page.getByRole('heading', { level: 1, name: 'Spec Diff Checker' })).toBeVisible();
   });
 
   test('헤더 영역 스냅샷', async ({ page }) => {
-    const header = page.locator('header');
+    const header = page.locator('header > div');
     await expect(header).toHaveScreenshot('header.png');
   });
 
@@ -78,7 +78,7 @@ test.describe('UI 보호: Next.js 앱 메인 화면', () => {
   });
 
   test('Findings 영역 스냅샷', async ({ page }) => {
-    const findingsSection = page.locator('h2:has-text("③ Findings")').locator('..');
+    const findingsSection = page.locator('h2:has-text("③ By Requirement")').locator('..');
     await expect(findingsSection).toHaveScreenshot('findings-section.png');
   });
 
@@ -97,7 +97,7 @@ test.describe('UI 보호: Next.js 앱 메인 화면', () => {
 test.describe('UI 보호: Figma 입력 모드 전환', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/');
-    await page.waitForSelector('h1:has-text("Spec–Design–Implementation Diff Checker")');
+    await expect(page.getByRole('heading', { level: 1, name: 'Spec Diff Checker' })).toBeVisible();
   });
 
   test('JSON 직접 붙여넣기 모드 스냅샷', async ({ page }) => {

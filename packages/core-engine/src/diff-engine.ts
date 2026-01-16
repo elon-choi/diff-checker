@@ -24,7 +24,7 @@ export class DiffEngine {
     phase: 1 | 2 | 3 | 4,
     inputs: {
       spec: UUMDocument;
-      figma: UUMDocument;
+      figma?: UUMDocument;
       web?: UUMDocument;
       android?: UUMDocument;
       ios?: UUMDocument;
@@ -32,8 +32,10 @@ export class DiffEngine {
     specItems: SpecItem[]
   ): Promise<DiffFinding[]> {
     // Guardrail: SpecItems(TEXT) 개수 < 5 이면 Diff 실행하지 않음
+    // 단, 표 기반 SpecItem이 존재하면 비교를 진행
     const textSpecItems = specItems.filter((item) => item.kind === 'TEXT' && item.text);
-    if (textSpecItems.length < 5) {
+    const hasTableItems = specItems.some((item) => item.meta?.source === 'table');
+    if (textSpecItems.length < 5 && !hasTableItems) {
       return [{
         id: 'guardrail:spec-items-insufficient',
         severity: 'CRITICAL',

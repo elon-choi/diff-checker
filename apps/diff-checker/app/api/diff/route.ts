@@ -7,10 +7,52 @@ import { WebNormalizer } from '../../../../../packages/normalizers/web-normalize
 import { AndroidNormalizer } from '../../../../../packages/normalizers/android-normalizer/src/index';
 import { IOSNormalizer } from '../../../../../packages/normalizers/ios-normalizer/src/index';
 import type { SpecItem } from '../../../../../packages/core-engine/src/types';
-import { extractSpecItemsFromTables } from '../../../lib/table-parser';
+import { extractSpecItemsFromTables, extractLatestDateFromHtmlContent } from '../../../lib/table-parser';
 import { isNoiseSpecItem, isNoise } from '../../../lib/noise-filter';
 import { extractSelectorKeyFromText, removeSelectorKeyFromText, normalizeKey } from '../../../../../packages/core-engine/src/utils/selector-key';
 import { LLMAdapter } from '../../../../../packages/adapters/llm-adapter/src/index';
+
+function normalizeSpecHtmlInput(input: string): string {
+  let result = input;
+  const trimmed = result.trim();
+
+  if (trimmed.startsWith('"') && trimmed.endsWith('"') && (trimmed.includes('\\n') || trimmed.includes('\\"') || trimmed.includes('<table') || trimmed.includes('&lt;table'))) {
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (typeof parsed === 'string') {
+        result = parsed;
+      }
+    } catch {
+      // JSON 문자열이 아니면 그대로 진행
+    }
+  }
+
+  if (result.includes('\\n') || result.includes('\\"') || result.includes('\\t') || result.includes('\\r')) {
+    result = result
+      .replace(/\\n/g, '\n')
+      .replace(/\\r/g, '\r')
+      .replace(/\\t/g, '\t')
+      .replace(/\\"/g, '"')
+      .replace(/\\'/g, "'");
+  }
+
+  if (result.startsWith('"') && result.endsWith('"') && (result.includes('<table') || result.includes('&lt;table'))) {
+    result = result.slice(1, -1);
+  }
+
+  return decodeHtmlEntitiesIfEscaped(result);
+}
+
+function decodeHtmlEntitiesIfEscaped(input: string): string {
+  if (input.includes('<table') || !input.includes('&lt;table')) return input;
+  return input
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ');
+}
 
 // 업데이트 날짜 패턴: "Update date: 25.12.10", "업데이트: 25.12.10", "(Update date: 25.12.10)" 등
 const UPDATE_DATE_PATTERNS = [
@@ -18,6 +60,7 @@ const UPDATE_DATE_PATTERNS = [
   /\(?\s*업데이트\s*:\s*(\d{2}\.\d{2}\.\d{2})\s*\)?/i,
   /\(?\s*Update\s*:\s*(\d{2}\.\d{2}\.\d{2})\s*\)?/i,
   /\(?\s*(\d{2}\.\d{2}\.\d{2})\s*update\s*\)?/i,
+  /(\d{1,2}[./-]\d{1,2})\s*(?:업데이트|update)/i,
 ];
 
 // 취소선 패턴: ~~텍스트~~ 또는 <del>텍스트</del>
@@ -84,7 +127,29 @@ function isMetadata(text: string): boolean {
   return false;
 }
 
-function parseLineForUpdates(line: string): { text: string; isDeprecated: boolean; isUpdated: boolean; updateDate?: string } {
+function normalizeUpdateDate(text: string, fallbackYear?: number): string | undefined {
+  const trimmed = text.trim();
+  let match = trimmed.match(/(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일/);
+  if (match) return `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`;
+  match = trimmed.match(/(\d{4})[./-](\d{1,2})[./-](\d{1,2})/);
+  if (match) return `${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`;
+  match = trimmed.match(/(\d{2})[./-](\d{1,2})[./-](\d{1,2})/);
+  if (match) return `20${match[1]}-${match[2].padStart(2, '0')}-${match[3].padStart(2, '0')}`;
+  match = trimmed.match(/(\d{1,2})[./-](\d{1,2})/);
+  if (match && fallbackYear) return `${fallbackYear}-${match[1].padStart(2, '0')}-${match[2].padStart(2, '0')}`;
+  return;
+}
+
+function filterItemsByLatestDate(items: SpecItem[], latestDate?: string): SpecItem[] {
+  if (!latestDate) return items;
+  return items.filter((item) => {
+    const updateDate = item.meta?.updateDate;
+    if (!updateDate) return true;
+    return updateDate >= latestDate;
+  });
+}
+
+function parseLineForUpdates(line: string, fallbackYear?: number): { text: string; isDeprecated: boolean; isUpdated: boolean; updateDate?: string } {
   let text = line.trim();
   let isDeprecated = false;
   let isUpdated = false;
@@ -105,7 +170,7 @@ function parseLineForUpdates(line: string): { text: string; isDeprecated: boolea
     const match = text.match(pattern);
     if (match) {
       isUpdated = true;
-      updateDate = match[1] || match[0];
+      updateDate = normalizeUpdateDate(match[1] || match[0], fallbackYear) || match[1] || match[0];
       break;
     }
   }
@@ -113,8 +178,10 @@ function parseLineForUpdates(line: string): { text: string; isDeprecated: boolea
   return { text, isDeprecated, isUpdated, updateDate };
 }
 
-async function deriveSpecItemsFromMarkdown(specText: string): Promise<SpecItem[]> {
+async function deriveSpecItemsFromMarkdown(specText: string): Promise<{ items: SpecItem[]; latestSpecDate?: string }> {
   const items: SpecItem[] = [];
+  const normalizedSpecText = normalizeSpecHtmlInput(specText);
+  let latestSpecDate: string | undefined;
   
   // Phase-2: 섹션 경로 추적을 위한 스택
   const sectionStack: Array<{ level: number; title: string }> = [];
@@ -126,12 +193,14 @@ async function deriveSpecItemsFromMarkdown(specText: string): Promise<SpecItem[]
   };
   
   // 1. HTML 표 파싱 (표가 있으면 우선 처리)
-  const hasTable = specText.includes('<table');
+  const hasTable = normalizedSpecText.includes('<table');
   if (hasTable) {
     try {
-      console.log('[DEBUG] 표 파싱 시작, HTML 길이:', specText.length);
-      console.log('[DEBUG] HTML 샘플 (처음 1000자):', specText.substring(0, 1000));
-      const tableItems = await extractSpecItemsFromTables(specText);
+      console.log('[DEBUG] 표 파싱 시작, HTML 길이:', normalizedSpecText.length);
+      console.log('[DEBUG] HTML 샘플 (처음 1000자):', normalizedSpecText.substring(0, 1000));
+      const tableParseResult = await extractSpecItemsFromTables(normalizedSpecText);
+      const tableItems = tableParseResult.items;
+      latestSpecDate = tableParseResult.updateHistory?.latestDate;
       console.log('[DEBUG] 표에서 추출된 SpecItem 수:', tableItems.length);
       
       // Phase-2: 표 항목에 selectorKey와 sectionPath 추가
@@ -170,7 +239,8 @@ async function deriveSpecItemsFromMarkdown(specText: string): Promise<SpecItem[]
   }
   
   // 2. 텍스트 라인 파싱 (기존 로직)
-  const lines = specText.split('\n').map((l) => l.trim()).filter(Boolean);
+  const latestSpecYear = latestSpecDate ? Number(latestSpecDate.split('-')[0]) : undefined;
+  const lines = normalizedSpecText.split('\n').map((l) => l.trim()).filter(Boolean);
   
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -190,7 +260,7 @@ async function deriveSpecItemsFromMarkdown(specText: string): Promise<SpecItem[]
     }
     
     // 업데이트/취소선 정보 파싱
-    const parsed = parseLineForUpdates(line);
+    const parsed = parseLineForUpdates(line, latestSpecYear);
     
     // 취소선 처리된 항목은 비교 대상에서 제외 (deprecated)
     if (parsed.isDeprecated) {
@@ -265,7 +335,6 @@ async function deriveSpecItemsFromMarkdown(specText: string): Promise<SpecItem[]
         // 헌장 필드 추가 (optional, 기존 동작 유지)
         intent: '요구사항에 명시된 요소가 화면에 노출되어야 함',
         expected: true,
-        type: 'VISIBILITY' as any,
       });
       continue;
     }
@@ -315,12 +384,13 @@ async function deriveSpecItemsFromMarkdown(specText: string): Promise<SpecItem[]
     }
   }
   
-  return items;
+  const filteredItems = filterItemsByLatestDate(items, latestSpecDate);
+  return { items: filteredItems, latestSpecDate };
 }
 
 export async function POST(req: Request) {
   try {
-    const { phase, specText, specHtml, figmaJson, webJson, androidJson, iosJson } = await req.json();
+    const { phase, specText, specHtml, specBaselineHtml, specBaselineText, figmaJson, webJson, androidJson, iosJson } = await req.json();
     const rules = defaultRules;
     const engine = new DiffEngine(rules);
 
@@ -367,8 +437,8 @@ export async function POST(req: Request) {
         : undefined,
     ]);
 
-    // specHtml이 있으면 HTML로 파싱, 없으면 텍스트로 파싱
-    const specContent = specHtml || specText || '';
+    // specHtml이 있으면 HTML로 파싱, 없으면 텍스트로 파싱 (이스케이프 복원 포함)
+    const specContent = normalizeSpecHtmlInput(specHtml || specText || '');
     
     console.log('[DEBUG] API 호출 정보:');
     console.log('- specHtml 존재:', !!specHtml);
@@ -377,19 +447,39 @@ export async function POST(req: Request) {
     console.log('- 표 포함 여부:', specContent.includes('<table'));
     console.log('- specContent 처음 500자:', specContent.substring(0, 500));
     
-    let specItems = specContent ? await deriveSpecItemsFromMarkdown(specContent) : [];
+    const specParseResult = specContent ? await deriveSpecItemsFromMarkdown(specContent) : { items: [] as SpecItem[] };
+    let specItems = specParseResult.items;
+    let latestSpecDate = specParseResult.latestSpecDate;
+    let latestSpecDateSource: string | undefined = latestSpecDate ? 'update-history-table' : undefined;
     const initialSpecItemsCount = specItems.length;
+    
+    const baselineContent = normalizeSpecHtmlInput(specBaselineHtml || specBaselineText || '');
+    if (baselineContent) {
+      const baselineDate = extractLatestDateFromHtmlContent(baselineContent);
+      if (baselineDate.latestDate) {
+        latestSpecDate = baselineDate.latestDate;
+        latestSpecDateSource = baselineDate.latestDateRaw ? 'update-history-text-fallback' : latestSpecDateSource;
+      }
+    }
     
     // LLM 기반 SpecItem 검증 (선택적, 불확실한 항목만)
     const llmSpecValidationEnabled = process.env.LLM_SPEC_VALIDATION_ENABLED === 'true';
+    const llmSpecExtractionEnabled = process.env.LLM_SPEC_EXTRACTION_ENABLED === 'true';
     let llmValidationUsed = false;
     let llmValidatedCount = 0;
+    let llmExtractionUsed = false;
+    let llmExtractionCount = 0;
     
     if (llmSpecValidationEnabled && specItems.length > 0) {
       try {
         console.log('[DEBUG] LLM 기반 SpecItem 검증 시작...');
         const beforeCount = specItems.length;
-        specItems = await LLMAdapter.validateSpecItems(specItems, specContent || '');
+        const validatedItems = await LLMAdapter.validateSpecItems(specItems, specContent || '');
+        if (validatedItems.length === 0) {
+          console.warn('[DEBUG] LLM 검증 결과가 0개입니다. 원본 SpecItem을 유지합니다.');
+        } else {
+          specItems = validatedItems;
+        }
         llmValidatedCount = beforeCount - specItems.length;
         llmValidationUsed = true;
         console.log('[DEBUG] LLM 검증 후 SpecItem 수:', specItems.length, `(${llmValidatedCount}개 제외)`);
@@ -409,16 +499,50 @@ export async function POST(req: Request) {
     console.log('- 텍스트에서 추출된 항목:', textItemsCount);
     
     // Guardrail: SpecItems가 0개거나 매우 적으면 Diff 실행하지 않음
-    const validSpecItems = specItems.filter(item => !isNoiseSpecItem(item));
+    let validSpecItems = specItems.filter(item => !isNoiseSpecItem(item));
     
     // 디버깅: 노이즈 필터링 상세 정보
     const noiseFilteredCount = specItems.length - validSpecItems.length;
     const sampleNoiseItems = specItems.filter(item => isNoiseSpecItem(item)).slice(0, 3);
     
+    if (validSpecItems.length === 0 && llmSpecExtractionEnabled) {
+      try {
+        console.log('[DEBUG] LLM 기반 SpecItem 추출 시작...');
+        const extractedTexts = await LLMAdapter.extractSpecTexts(specContent || '');
+        const dedupedTexts = Array.from(new Set(extractedTexts.map(text => text.trim()).filter(Boolean)));
+        const extractedItems = dedupedTexts
+          .filter(text => !isNoise(text) && text.length >= 2 && text.length <= 100)
+          .map((text, index) => ({
+            id: `spec-llm-${index}`,
+            kind: 'TEXT' as const,
+            text,
+            intent: `LLM 추출 UI 텍스트 "${text}"가 화면에 표시되어야 함`,
+            expected: text,
+            meta: {
+              source: 'text' as const,
+              column: 'content',
+              extraction: 'llm',
+            },
+          }));
+
+        if (extractedItems.length > 0) {
+          llmExtractionUsed = true;
+          llmExtractionCount = extractedItems.length;
+          specItems = extractedItems;
+          validSpecItems = specItems.filter(item => !isNoiseSpecItem(item));
+          console.log('[DEBUG] LLM 기반 SpecItem 추출 결과:', extractedItems.length);
+        } else {
+          console.warn('[DEBUG] LLM 기반 SpecItem 추출 결과가 비어있습니다.');
+        }
+      } catch (error) {
+        console.warn('[DEBUG] LLM 기반 SpecItem 추출 실패:', error);
+      }
+    }
+
     if (validSpecItems.length === 0) {
       return NextResponse.json({ 
         error: 'Spec 추출 실패',
-        message: `표 파싱 또는 섹션 선택을 확인해주세요. 유효한 SpecItem이 추출되지 않았습니다.\n\n디버깅 정보:\n- 표 포함 여부: ${hasTable ? '예' : '아니오'}\n- 표에서 추출된 항목: ${tableItemsCount}개\n- 텍스트에서 추출된 항목: ${textItemsCount}개\n- 전체 추출 항목: ${specItems.length}개\n- 노이즈 필터링으로 제외된 항목: ${noiseFilteredCount}개\n- 최종 유효 항목: ${validSpecItems.length}개\n\n제외된 항목 예시:\n${sampleNoiseItems.map(item => `- "${item.text?.substring(0, 30)}" (${item.meta?.source || 'unknown'})`).join('\n')}`,
+        message: `표 파싱 또는 섹션 선택을 확인해주세요. 유효한 SpecItem이 추출되지 않았습니다.\n\n디버깅 정보:\n- 표 포함 여부: ${hasTable ? '예' : '아니오'}\n- 표에서 추출된 항목: ${tableItemsCount}개\n- 텍스트에서 추출된 항목: ${textItemsCount}개\n- 전체 추출 항목: ${specItems.length}개\n- 노이즈 필터링으로 제외된 항목: ${noiseFilteredCount}개\n- 최종 유효 항목: ${validSpecItems.length}개\n- LLM 추출 사용: ${llmSpecExtractionEnabled ? '가능' : '비활성'} / 결과: ${llmExtractionCount}개\n\n제외된 항목 예시:\n${sampleNoiseItems.map(item => `- "${item.text?.substring(0, 30)}" (${item.meta?.source || 'unknown'})`).join('\n')}`,
         specItemsCount: specItems.length,
         validSpecItemsCount: 0,
         debug: {
@@ -437,8 +561,55 @@ export async function POST(req: Request) {
     }
     
     // Guardrail: SpecItems(TEXT) 개수 < 5 이면 Diff 실행하지 않음
-    const textSpecItems = validSpecItems.filter((item) => item.kind === 'TEXT' && item.text);
-    if (textSpecItems.length < 5) {
+    // 단, 표 기반 문서에서 최소 개수를 충족하지 못하더라도 표 추출이 성공했다면 진행 허용
+    let textSpecItems = validSpecItems.filter((item) => item.kind === 'TEXT' && item.text);
+    const hasTableItems = hasTable && tableItemsCount > 0;
+
+    // SpecItem이 부족할 때 LLM으로 보강 추출 (표 기반 문서 포함)
+    if (llmSpecExtractionEnabled && textSpecItems.length < 5) {
+      try {
+        console.log('[DEBUG] SpecItem 부족으로 LLM 보강 추출 시도...');
+        const extractedTexts = await LLMAdapter.extractSpecTexts(specContent || '');
+        const dedupedTexts = Array.from(new Set(extractedTexts.map(text => text.trim()).filter(Boolean)));
+
+        const existingTextSet = new Set(
+          specItems
+            .map(item => item.text?.trim().toLowerCase())
+            .filter((text): text is string => Boolean(text))
+        );
+
+        const extractedItems = dedupedTexts
+          .filter(text => !isNoise(text) && text.length >= 2 && text.length <= 100)
+          .filter(text => !existingTextSet.has(text.toLowerCase()))
+          .map((text, index) => ({
+            id: `spec-llm-augment-${index}`,
+            kind: 'TEXT' as const,
+            text,
+            intent: `LLM 보강 추출 UI 텍스트 "${text}"가 화면에 표시되어야 함`,
+            expected: text,
+            meta: {
+              source: 'text' as const,
+              column: 'content',
+              extraction: 'llm',
+            },
+          }));
+
+        if (extractedItems.length > 0) {
+          llmExtractionUsed = true;
+          llmExtractionCount += extractedItems.length;
+          specItems = [...specItems, ...extractedItems];
+          validSpecItems = specItems.filter(item => !isNoiseSpecItem(item));
+          textSpecItems = validSpecItems.filter((item) => item.kind === 'TEXT' && item.text);
+          console.log('[DEBUG] LLM 보강 추출 결과:', extractedItems.length, '총 TEXT:', textSpecItems.length);
+        } else {
+          console.warn('[DEBUG] LLM 보강 추출 결과가 비어있습니다.');
+        }
+      } catch (error) {
+        console.warn('[DEBUG] LLM 보강 추출 실패:', error);
+      }
+    }
+
+    if (textSpecItems.length < 5 && !hasTableItems) {
       return NextResponse.json({ 
         error: 'Spec 추출 부족',
         message: `Spec에서 UI 텍스트를 거의 추출하지 못했습니다. 표 파싱 / 섹션 선택 / 필터 규칙을 확인하세요.\n\n디버깅 정보:\n- 표 포함 여부: ${hasTable ? '예' : '아니오'}\n- 표에서 추출된 항목: ${tableItemsCount}개\n- 텍스트에서 추출된 항목: ${textItemsCount}개\n- 전체 추출 항목: ${specItems.length}개\n- TEXT 항목: ${textSpecItems.length}개 (최소 5개 필요)`,
@@ -452,12 +623,19 @@ export async function POST(req: Request) {
         },
       }, { status: 400 });
     }
+    if (textSpecItems.length < 5 && hasTableItems) {
+      console.warn('[DEBUG] 표 기반 SpecItem이 적어도 일부 추출되어 Guardrail을 우회합니다.', {
+        textSpecItems: textSpecItems.length,
+        tableItemsCount,
+        textItemsCount,
+      });
+    }
 
     const findings = await engine.runPhase(
       phase as 1 | 2 | 3 | 4,
       {
         spec: specDoc!,
-        figma: figmaDoc!,
+        figma: figmaDoc,
         web: webDoc,
         android: androidDoc,
         ios: iosDoc,
@@ -478,11 +656,20 @@ export async function POST(req: Request) {
         total: filteredFindings.length,
         filtered: findings.length - filteredFindings.length,
         specItemsCount: validSpecItems.length,
+        specBaseline: {
+          date: latestSpecDate,
+          source: latestSpecDateSource,
+        },
         llmValidation: {
           enabled: llmSpecValidationEnabled,
           used: llmValidationUsed,
           initialCount: initialSpecItemsCount,
           filteredCount: llmValidatedCount,
+        },
+        llmExtraction: {
+          enabled: llmSpecExtractionEnabled,
+          used: llmExtractionUsed,
+          extractedCount: llmExtractionCount,
         },
       },
       specItems: validSpecItems.map(item => ({

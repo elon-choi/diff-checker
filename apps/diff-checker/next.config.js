@@ -5,6 +5,7 @@ const nextConfig = {
     '@diff-checker/html-reporter',
     '@diff-checker/json-reporter',
     '@diff-checker/core-engine',
+    '@diff-checker/web-collector',
   ],
   // CORS 설정 제거: 웹 앱 제거로 더 이상 필요 없음
   // Next.js 앱이 단일 앱으로 동작하므로 CORS 불필요

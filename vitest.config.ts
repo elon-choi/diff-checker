@@ -6,6 +6,12 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['**/*.{test,spec}.{js,mjs,cjs,ts,mts,cts,jsx,tsx}'],
+    exclude: [
+      'tests/ui-snapshots/**',
+      '**/node_modules/**',
+      '**/.pnpm/**',
+      '**/.ignored/**',
+    ],
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],

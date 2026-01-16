@@ -10,6 +10,24 @@ function normalizeText(value?: string): string {
     .toLowerCase();
 }
 
+function isMetadataLikeLabel(text?: string): boolean {
+  if (!text) return false;
+  const normalized = normalizeText(text);
+  const hasUpdateLabel = normalized.includes('last update') || normalized.includes('업데이트');
+  const hasDate = /\d{4}[./-]\d{1,2}[./-]\d{1,2}/.test(normalized) || /\d{1,2}[./-]\d{1,2}/.test(normalized);
+  return hasUpdateLabel && hasDate;
+}
+
+const UI_TYPE_WORD_PATTERN = /(버튼|텍스트|체크\s*박스|체크박스|라벨|옵션|입력|선택|토글|스위치|링크|탭|메뉴)/g;
+
+function stripUiTypeWords(value?: string): string {
+  if (!value) return '';
+  return value
+    .replace(UI_TYPE_WORD_PATTERN, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function includesText(haystack?: string, needle?: string): boolean {
   const h = normalizeText(haystack);
   const n = normalizeText(needle);
@@ -133,103 +151,82 @@ function findMatchingNode(
 }
 
 // Phase-2: selectorKey 기반 1:1 매핑 규칙 (우선 적용)
+// Figma와 Web 모두 처리
 export const keyedDiffRule: DiffRule = {
   id: 'keyed.diff',
-  description: 'selectorKey 기반 SpecItem ↔ FigmaNode 1:1 매핑 비교',
+  description: 'selectorKey 기반 SpecItem ↔ Platform Node 1:1 매핑 비교 (Figma, Web)',
   apply(docs: UUMDocument[], specItems: SpecItem[]): DiffFinding[] {
     const findings: DiffFinding[] = [];
-    const figmaDoc = docs.find((d) => d.platform === 'FIGMA');
     
-    if (!figmaDoc) return findings;
+    // Figma와 Web 문서 찾기
+    const figmaDoc = docs.find((d) => d.platform === 'FIGMA');
+    const webDoc = docs.find((d) => d.platform === 'WEB');
+    
+    // 둘 다 없으면 처리하지 않음
+    if (!figmaDoc && !webDoc) return findings;
 
     // selectorKey가 있는 SpecItem만 처리
     const keyedSpecItems = specItems.filter((item) => item.kind === 'TEXT' && item.text && item.selectorKey);
     
     // Figma 노드를 selectorKey로 인덱싱
     const figmaByKey = new Map<string, typeof figmaDoc.nodes>();
-    for (const node of figmaDoc.nodes) {
-      if (node.role === 'TEXT' && node.selectorKey) {
-        if (!figmaByKey.has(node.selectorKey)) {
-          figmaByKey.set(node.selectorKey, []);
+    if (figmaDoc) {
+      for (const node of figmaDoc.nodes) {
+        if (node.role === 'TEXT' && node.selectorKey) {
+          if (!figmaByKey.has(node.selectorKey)) {
+            figmaByKey.set(node.selectorKey, []);
+          }
+          figmaByKey.get(node.selectorKey)!.push(node);
         }
-        figmaByKey.get(node.selectorKey)!.push(node);
+      }
+    }
+    
+    // Web 노드를 selectorKey로 인덱싱
+    const webByKey = new Map<string, typeof webDoc.nodes>();
+    if (webDoc) {
+      for (const node of webDoc.nodes) {
+        // Web은 role이 TEXT가 아니어도 텍스트가 있으면 처리
+        if (node.text && node.selectorKey) {
+          if (!webByKey.has(node.selectorKey)) {
+            webByKey.set(node.selectorKey, []);
+          }
+          webByKey.get(node.selectorKey)!.push(node);
+        }
       }
     }
 
     const textSpecItems = specItems.filter((item) => item.kind === 'TEXT' && item.text);
     const specItemsCount = textSpecItems.length;
 
-    // SpecItem별로 매핑 확인
+    // SpecItem별로 매핑 확인 (Figma와 Web 각각 처리)
     for (const specItem of keyedSpecItems) {
       const selectorKey = specItem.selectorKey!;
       const specText = specItem.text!.trim();
-      const figmaNodes = figmaByKey.get(selectorKey) || [];
-
-      if (figmaNodes.length === 0) {
-        // MISSING: Spec에 있지만 Figma에 없음
-        findings.push({
-          id: `keyed.missing:${specItem.id}`,
-          severity: 'MAJOR',
-          category: 'MISSING_ELEMENT',
-          description: `Spec 요구사항 "${specText}" (Key: ${selectorKey})가 Figma에 없음`,
-          evidence: {
-            expected: specText,
-            selectorKey,
-            specItem,
-          },
-          relatedSpecId: specItem.id,
-          selectorKey,
-          diffType: 'MISSING',
-          requirement: specItem.sectionPath,
-          meta: {
-            ...specItem.meta,
-            ruleName: 'keyed.diff',
-            ruleReason: `selectorKey "${selectorKey}"로 매핑된 Figma 노드가 없음`,
-            recommendedAction: 'design-update' as const,
-          },
-          specSideEvidence: {
-            spec_section: specItem.meta?.section,
-            spec_row: specItem.meta?.row,
-            spec_feature: specItem.meta?.feature,
-            spec_text: specText,
-            spec_items_count: specItemsCount,
-          },
-          decisionMetadata: {
-            rule_name: 'keyed.diff',
-            decision_reason_code: 'SPEC_CONFIRMED_MISSING',
-            decision_explanation: `Spec에 정의된 selectorKey "${selectorKey}"에 해당하는 Figma 노드가 없습니다.`,
-          },
-        });
-      } else {
-        // 매칭된 노드가 있으면 텍스트 비교
-        const figmaNode = figmaNodes[0]; // 첫 번째 매칭 노드 사용
-        const figmaText = figmaNode.text?.trim() || '';
-        
-        if (specText !== figmaText) {
-          // CHANGED: 텍스트가 다름
-          const similarity = calculateTextSimilarity(specText, figmaText);
+      
+      // Figma 매칭 확인
+      if (figmaDoc) {
+        const figmaNodes = figmaByKey.get(selectorKey) || [];
+        if (figmaNodes.length === 0) {
           findings.push({
-            id: `keyed.changed:${specItem.id}`,
-            severity: similarity < 0.7 ? 'MAJOR' : 'MINOR',
-            category: 'TEXT_MISMATCH',
-            description: `Spec 요구사항 "${specText}" (Key: ${selectorKey})가 Figma에서 "${figmaText}"로 변경됨`,
+            id: `keyed.missing.figma:${specItem.id}`,
+            severity: 'MAJOR',
+            category: 'MISSING_ELEMENT',
+            description: `Spec 요구사항 "${specText}" (Key: ${selectorKey})가 Figma에 없음`,
             evidence: {
               expected: specText,
-              found: figmaText,
               selectorKey,
-              similarity,
               specItem,
-              figmaNode,
+              platform: 'FIGMA',
             },
             relatedSpecId: specItem.id,
             selectorKey,
-            diffType: 'CHANGED',
+            diffType: 'MISSING',
             requirement: specItem.sectionPath,
             meta: {
               ...specItem.meta,
               ruleName: 'keyed.diff',
-              ruleReason: `selectorKey "${selectorKey}"로 매핑된 텍스트가 다름: "${specText}" vs "${figmaText}"`,
-              recommendedAction: similarity < 0.7 ? 'design-update' as const : 'spec-update' as const,
+              ruleReason: `selectorKey "${selectorKey}"로 매핑된 Figma 노드가 없음`,
+              recommendedAction: 'design-update' as const,
             },
             specSideEvidence: {
               spec_section: specItem.meta?.section,
@@ -238,19 +235,145 @@ export const keyedDiffRule: DiffRule = {
               spec_text: specText,
               spec_items_count: specItemsCount,
             },
-            figmaSideEvidence: {
-              figma_text: figmaText,
-              figma_frame_path: figmaNode.path,
-              figma_layer_name: figmaNode.name,
+            decisionMetadata: {
+              rule_name: 'keyed.diff',
+              decision_reason_code: 'SPEC_CONFIRMED_MISSING',
+              decision_explanation: `Spec에 정의된 selectorKey "${selectorKey}"에 해당하는 Figma 노드가 없습니다.`,
+            },
+          });
+        } else {
+          const figmaNode = figmaNodes[0];
+          const figmaText = figmaNode.text?.trim() || '';
+          if (specText !== figmaText) {
+            const similarity = calculateTextSimilarity(specText, figmaText);
+            findings.push({
+              id: `keyed.changed.figma:${specItem.id}`,
+              severity: similarity < 0.7 ? 'MAJOR' : 'MINOR',
+              category: 'TEXT_MISMATCH',
+              description: `Spec 요구사항 "${specText}" (Key: ${selectorKey})가 Figma에서 "${figmaText}"로 변경됨`,
+              evidence: {
+                expected: specText,
+                found: figmaText,
+                selectorKey,
+                similarity,
+                specItem,
+                figmaNode,
+                platform: 'FIGMA',
+              },
+              relatedSpecId: specItem.id,
+              selectorKey,
+              diffType: 'CHANGED',
+              requirement: specItem.sectionPath,
+              meta: {
+                ...specItem.meta,
+                ruleName: 'keyed.diff',
+                ruleReason: `selectorKey "${selectorKey}"로 매핑된 텍스트가 다름: "${specText}" vs "${figmaText}"`,
+                recommendedAction: similarity < 0.7 ? 'design-update' as const : 'spec-update' as const,
+              },
+              specSideEvidence: {
+                spec_section: specItem.meta?.section,
+                spec_row: specItem.meta?.row,
+                spec_feature: specItem.meta?.feature,
+                spec_text: specText,
+                spec_items_count: specItemsCount,
+              },
+              figmaSideEvidence: {
+                figma_text: figmaText,
+                figma_frame_path: figmaNode.path,
+                figma_layer_name: figmaNode.name,
+              },
+              decisionMetadata: {
+                rule_name: 'keyed.diff',
+                decision_reason_code: 'SPEC_PRESENT_BUT_NORMALIZATION_FAIL',
+                decision_explanation: `selectorKey "${selectorKey}"로 매핑된 텍스트가 다릅니다. (유사도: ${(similarity * 100).toFixed(0)}%)`,
+              },
+            });
+          }
+        }
+      }
+      
+      // Web 매칭 확인
+      if (webDoc) {
+        const webNodes = webByKey.get(selectorKey) || [];
+        if (webNodes.length === 0) {
+          findings.push({
+            id: `keyed.missing.web:${specItem.id}`,
+            severity: 'MAJOR',
+            category: 'MISSING_ELEMENT',
+            description: `Spec 요구사항 "${specText}" (Key: ${selectorKey})가 Web에 없음`,
+            evidence: {
+              expected: specText,
+              selectorKey,
+              specItem,
+              platform: 'WEB',
+            },
+            relatedSpecId: specItem.id,
+            selectorKey,
+            diffType: 'MISSING',
+            requirement: specItem.sectionPath,
+            meta: {
+              ...specItem.meta,
+              ruleName: 'keyed.diff',
+              ruleReason: `selectorKey "${selectorKey}"로 매핑된 Web 노드가 없음`,
+              recommendedAction: 'design-update' as const,
+            },
+            specSideEvidence: {
+              spec_section: specItem.meta?.section,
+              spec_row: specItem.meta?.row,
+              spec_feature: specItem.meta?.feature,
+              spec_text: specText,
+              spec_items_count: specItemsCount,
             },
             decisionMetadata: {
               rule_name: 'keyed.diff',
-              decision_reason_code: 'SPEC_PRESENT_BUT_NORMALIZATION_FAIL',
-              decision_explanation: `selectorKey "${selectorKey}"로 매핑된 텍스트가 다릅니다. (유사도: ${(similarity * 100).toFixed(0)}%)`,
+              decision_reason_code: 'SPEC_CONFIRMED_MISSING',
+              decision_explanation: `Spec에 정의된 selectorKey "${selectorKey}"에 해당하는 Web 노드가 없습니다.`,
             },
           });
+        } else {
+          const webNode = webNodes[0];
+          const webText = webNode.text?.trim() || '';
+          if (specText !== webText) {
+            const similarity = calculateTextSimilarity(specText, webText);
+            findings.push({
+              id: `keyed.changed.web:${specItem.id}`,
+              severity: similarity < 0.7 ? 'MAJOR' : 'MINOR',
+              category: 'TEXT_MISMATCH',
+              description: `Spec 요구사항 "${specText}" (Key: ${selectorKey})가 Web에서 "${webText}"로 변경됨`,
+              evidence: {
+                expected: specText,
+                found: webText,
+                selectorKey,
+                similarity,
+                specItem,
+                webNode,
+                platform: 'WEB',
+              },
+              relatedSpecId: specItem.id,
+              selectorKey,
+              diffType: 'CHANGED',
+              requirement: specItem.sectionPath,
+              meta: {
+                ...specItem.meta,
+                ruleName: 'keyed.diff',
+                ruleReason: `selectorKey "${selectorKey}"로 매핑된 텍스트가 다름: "${specText}" vs "${webText}"`,
+                recommendedAction: similarity < 0.7 ? 'design-update' as const : 'spec-update' as const,
+              },
+              specSideEvidence: {
+                spec_section: specItem.meta?.section,
+                spec_row: specItem.meta?.row,
+                spec_feature: specItem.meta?.feature,
+                spec_text: specText,
+                spec_items_count: specItemsCount,
+              },
+              decisionMetadata: {
+                rule_name: 'keyed.diff',
+                decision_reason_code: 'SPEC_PRESENT_BUT_NORMALIZATION_FAIL',
+                decision_explanation: `selectorKey "${selectorKey}"로 매핑된 텍스트가 다릅니다. (유사도: ${(similarity * 100).toFixed(0)}%)`,
+              },
+            });
+          }
         }
-        // 텍스트가 같으면 finding 없음 (정상 매칭)
       }
     }
 
@@ -334,7 +457,16 @@ export const textStrictRule: DiffRule = {
       if (!item.text) continue;
       const expected = item.text.trim();
 
-      const match = findMatchingNode(item, docs, index);
+      let match = findMatchingNode(item, docs, index);
+      if (!match) {
+        const strippedText = stripUiTypeWords(expected);
+        if (strippedText && strippedText !== expected && strippedText.length >= 2) {
+          match = findMatchingNode({ ...item, text: strippedText }, docs, index);
+          if (match) {
+            continue;
+          }
+        }
+      }
 
       if (!match) {
         const specFulltextHits = countSpecFulltextHits(expected);
@@ -801,6 +933,9 @@ export const reverseComparisonRule: DiffRule = {
       // Boolean/null 값 제외
       if (/^(true|false|none|null|undefined)$/i.test(figmaText)) continue;
 
+      // 업데이트 라벨(메타데이터) 제외
+      if (isMetadataLikeLabel(figmaText)) continue;
+
     // Phase-2: selectorKey가 있는 Figma 노드는 keyedDiffRule에서 처리했으므로 건너뛰기
     if (figmaNode.selectorKey) {
       continue; // selectorKey가 있으면 keyedDiffRule에서 처리됨
@@ -871,15 +1006,20 @@ export const reverseComparisonRule: DiffRule = {
           figmaNode.path?.toLowerCase().includes(keyword.toLowerCase())
         );
 
+        // 해상도 라벨(예: "320 해상도")은 메타데이터로 간주
+        const isResolutionLabel = /(^\d{3,4}\s*해상도$)|(\b해상도\b)/i.test(normalizedFigmaText);
+
         // CONTENT_TEXT 체크 (작가명, 해시태그, 작품명 등)
         const contentKeywords = ['작가', '작품', '해시태그', '태그', 'author', 'hashtag', 'tag', '작품명'];
         const isContentText = contentKeywords.some(keyword => 
           normalizedFigmaText.includes(keyword.toLowerCase())
         );
 
-        if (isAnnotation) {
+        if (isAnnotation || isResolutionLabel) {
           decisionReasonCode = 'FIGMA_ANNOTATION_SUSPECT';
-          decisionExplanation = `Figma 텍스트 "${figmaText}"는 툴팁/설명 등 주석성 텍스트로 보입니다.`;
+          decisionExplanation = isResolutionLabel
+            ? `Figma 텍스트 "${figmaText}"는 해상도 라벨(메타데이터)로 보입니다.`
+            : `Figma 텍스트 "${figmaText}"는 툴팁/설명 등 주석성 텍스트로 보입니다.`;
         } else if (isContentText) {
           decisionReasonCode = 'CONTENT_TEXT';
           decisionExplanation = `Figma 텍스트 "${figmaText}"는 작가명/해시태그/작품명 등 콘텐츠 텍스트로 보입니다.`;

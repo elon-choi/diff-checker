@@ -1,4 +1,5 @@
 import { UUMDocument, UUMNode } from '../../../core-engine/src/types';
+import { normalizeKey } from '../../spec-normalizer/src/selector-key';
 
 type DomNode = {
   uid?: string;
@@ -10,8 +11,31 @@ type DomNode = {
   bounds?: { x: number; y: number; w: number; h: number };
   path?: string;
   children?: DomNode[];
+  attrs?: Record<string, string>;
   [key: string]: any;
 };
+
+/**
+ * Web DOM 노드에서 selectorKey 추출
+ * data-qa, data-testid 속성을 우선적으로 사용
+ */
+function extractSelectorKeyFromWebNode(node: any): string | undefined {
+  if (!node) return undefined;
+  
+  // attrs에서 data-qa 또는 data-testid 추출
+  const attrs = node.attrs || {};
+  const dataQa = attrs['data-qa'] || attrs['dataQa'];
+  const dataTestId = attrs['data-testid'] || attrs['dataTestId'];
+  
+  if (dataQa) {
+    return normalizeKey(dataQa);
+  }
+  if (dataTestId) {
+    return normalizeKey(dataTestId);
+  }
+  
+  return undefined;
+}
 
 export const WebNormalizer = {
   canHandle: (input: any) =>
@@ -45,6 +69,7 @@ export const WebNormalizer = {
     // Case A: flat array under data.nodes (legacy/sample)
     if (Array.isArray(data?.nodes)) {
       data.nodes.forEach((n: any, i: number) => {
+        const selectorKey = extractSelectorKeyFromWebNode(n);
         nodes.push({
           uid: n?.uid ?? `web-${i}`,
           platform: 'WEB',
@@ -54,6 +79,7 @@ export const WebNormalizer = {
           selector: n?.selector ?? n?.path ?? undefined,
           visible: n?.visible ?? true,
           path: n?.path ?? `/web/${i}`,
+          selectorKey, // Web DOM에서 추출한 selectorKey
           meta: { attrs: n?.attrs },
         });
       });
@@ -62,6 +88,7 @@ export const WebNormalizer = {
       const walk = (node: DomNode, path: string, index: number) => {
         const uid = node.uid ?? `web-${nodes.length}`;
         const thisPath = path || `/dom/${index}`;
+        const selectorKey = extractSelectorKeyFromWebNode(node);
         nodes.push({
           uid,
           platform: 'WEB',
@@ -71,6 +98,7 @@ export const WebNormalizer = {
           selector: thisPath,
           visible: node.visible ?? true,
           bounds: node.bounds,
+          selectorKey, // Web DOM에서 추출한 selectorKey
           meta: { attrs: node.attrs },
           path: thisPath,
         });
