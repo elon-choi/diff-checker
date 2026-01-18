@@ -296,40 +296,115 @@ export const keyedDiffRule: DiffRule = {
       if (webDoc) {
         const webNodes = webByKey.get(selectorKey) || [];
         if (webNodes.length === 0) {
-          findings.push({
-            id: `keyed.missing.web:${specItem.id}`,
-            severity: 'MAJOR',
-            category: 'MISSING_ELEMENT',
-            description: `Spec 요구사항 "${specText}" (Key: ${selectorKey})가 Web에 없음`,
-            evidence: {
-              expected: specText,
+          // selectorKey로 매칭 실패 시 텍스트 기반 매칭 시도
+          let textMatchFound = false;
+          let bestTextMatch: { node: UUMNode; similarity: number } | null = null;
+          
+          for (const node of webDoc.nodes) {
+            const nodeText = [node.text, node.name].filter(Boolean).join(' ');
+            if (!nodeText) continue;
+            
+            // 정확한 텍스트 매칭
+            const normalizedSpec = normalizeText(specText);
+            const normalizedNode = normalizeText(nodeText);
+            if (normalizedSpec === normalizedNode) {
+              textMatchFound = true;
+              break;
+            }
+            
+            // 유사도 기반 매칭 (임계값 0.7)
+            const similarity = calculateTextSimilarity(specText, nodeText);
+            if (similarity > 0.7) {
+              if (!bestTextMatch || similarity > bestTextMatch.similarity) {
+                bestTextMatch = { node, similarity };
+                textMatchFound = true;
+              }
+            }
+          }
+          
+          if (!textMatchFound) {
+            // selectorKey도 없고 텍스트 매칭도 실패
+            findings.push({
+              id: `keyed.missing.web:${specItem.id}`,
+              severity: 'MAJOR',
+              category: 'MISSING_ELEMENT',
+              description: `Spec 요구사항 "${specText}" (Key: ${selectorKey})가 Web에 없음`,
+              evidence: {
+                expected: specText,
+                selectorKey,
+                specItem,
+                platform: 'WEB',
+              },
+              relatedSpecId: specItem.id,
               selectorKey,
-              specItem,
-              platform: 'WEB',
-            },
-            relatedSpecId: specItem.id,
-            selectorKey,
-            diffType: 'MISSING',
-            requirement: specItem.sectionPath,
-            meta: {
-              ...specItem.meta,
-              ruleName: 'keyed.diff',
-              ruleReason: `selectorKey "${selectorKey}"로 매핑된 Web 노드가 없음`,
-              recommendedAction: 'design-update' as const,
-            },
-            specSideEvidence: {
-              spec_section: specItem.meta?.section,
-              spec_row: specItem.meta?.row,
-              spec_feature: specItem.meta?.feature,
-              spec_text: specText,
-              spec_items_count: specItemsCount,
-            },
-            decisionMetadata: {
-              rule_name: 'keyed.diff',
-              decision_reason_code: 'SPEC_CONFIRMED_MISSING',
-              decision_explanation: `Spec에 정의된 selectorKey "${selectorKey}"에 해당하는 Web 노드가 없습니다.`,
-            },
-          });
+              diffType: 'MISSING',
+              requirement: specItem.sectionPath,
+              meta: {
+                ...specItem.meta,
+                ruleName: 'keyed.diff',
+                ruleReason: `selectorKey "${selectorKey}"로 매핑된 Web 노드가 없고, 텍스트 매칭도 실패함`,
+                recommendedAction: 'design-update' as const,
+              },
+              specSideEvidence: {
+                spec_section: specItem.meta?.section,
+                spec_row: specItem.meta?.row,
+                spec_feature: specItem.meta?.feature,
+                spec_text: specText,
+                spec_items_count: specItemsCount,
+              },
+              decisionMetadata: {
+                rule_name: 'keyed.diff',
+                decision_reason_code: 'SPEC_CONFIRMED_MISSING',
+                decision_explanation: `Spec에 정의된 selectorKey "${selectorKey}"에 해당하는 Web 노드가 없고, 텍스트 "${specText}"도 Web에서 찾을 수 없습니다.`,
+              },
+            });
+          } else if (bestTextMatch && bestTextMatch.similarity < 0.9) {
+            // 텍스트 매칭은 성공했지만 유사도가 낮음
+            const webText = bestTextMatch.node.text || bestTextMatch.node.name || '';
+            findings.push({
+              id: `keyed.changed.web:${specItem.id}`,
+              severity: bestTextMatch.similarity < 0.7 ? 'MAJOR' : 'MINOR',
+              category: 'TEXT_MISMATCH',
+              description: `Spec 요구사항 "${specText}" (Key: ${selectorKey})가 Web에서 "${webText}"로 변경됨 (유사도: ${(bestTextMatch.similarity * 100).toFixed(0)}%)`,
+              evidence: {
+                expected: specText,
+                found: webText,
+                selectorKey,
+                similarity: bestTextMatch.similarity,
+                specItem,
+                webNode: bestTextMatch.node,
+                platform: 'WEB',
+              },
+              relatedSpecId: specItem.id,
+              selectorKey,
+              diffType: 'CHANGED',
+              requirement: specItem.sectionPath,
+              meta: {
+                ...specItem.meta,
+                ruleName: 'keyed.diff',
+                ruleReason: `selectorKey "${selectorKey}"로 매핑된 Web 노드가 없지만, 텍스트 유사도 매칭으로 "${webText}"를 찾음 (유사도: ${(bestTextMatch.similarity * 100).toFixed(0)}%)`,
+                recommendedAction: bestTextMatch.similarity < 0.7 ? 'design-update' as const : 'spec-update' as const,
+              },
+              specSideEvidence: {
+                spec_section: specItem.meta?.section,
+                spec_row: specItem.meta?.row,
+                spec_feature: specItem.meta?.feature,
+                spec_text: specText,
+                spec_items_count: specItemsCount,
+              },
+              webSideEvidence: {
+                web_text: webText,
+                web_path: bestTextMatch.node.path,
+                web_selector: bestTextMatch.node.selector,
+              },
+              decisionMetadata: {
+                rule_name: 'keyed.diff',
+                decision_reason_code: 'SPEC_PRESENT_BUT_NORMALIZATION_FAIL',
+                decision_explanation: `selectorKey "${selectorKey}"로 매핑된 Web 노드가 없지만, 텍스트 유사도 매칭으로 "${webText}"를 찾았습니다. (유사도: ${(bestTextMatch.similarity * 100).toFixed(0)}%)`,
+              },
+            });
+          }
+          // bestTextMatch.similarity >= 0.9이면 매칭 성공으로 간주하고 finding 생성 안 함
         } else {
           const webNode = webNodes[0];
           const webText = webNode.text?.trim() || '';
@@ -453,42 +528,345 @@ export const textStrictRule: DiffRule = {
       return matches ? matches.length : 0;
     };
 
+    // 디버깅: 플랫폼별 문서 존재 여부 확인
+    const webDoc = docs.find((d) => d.platform === 'WEB');
+    const figmaDoc = docs.find((d) => d.platform === 'FIGMA');
+    const androidDoc = docs.find((d) => d.platform === 'ANDROID');
+    const iosDoc = docs.find((d) => d.platform === 'IOS');
+    
+    // 각 플랫폼별로 매칭 확인할 문서 목록
+    // 문서가 존재하고 노드가 있어야 체크 대상에 포함
+    const platformsToCheck: Array<{ doc: UUMDocument | undefined; platform: string }> = [
+      { doc: webDoc, platform: 'WEB' },
+      { doc: figmaDoc, platform: 'FIGMA' },
+      { doc: androidDoc, platform: 'ANDROID' },
+      { doc: iosDoc, platform: 'IOS' },
+    ].filter(({ doc }) => doc !== undefined && doc.nodes.length > 0);
+    
+    console.log('[DEBUG] textStrictRule 실행:', {
+      unmappedSpecItemsCount: unmappedSpecItems.length,
+      webDocExists: !!webDoc,
+      webDocNodesCount: webDoc?.nodes.length || 0,
+      webDocSampleTexts: webDoc?.nodes.slice(0, 5).map(n => n.text || n.name).filter(Boolean) || [],
+      figmaDocExists: !!figmaDoc,
+      androidDocExists: !!androidDoc,
+      iosDocExists: !!iosDoc,
+      platformsToCheck: platformsToCheck.map(p => p.platform),
+      unmappedSpecItemsSample: unmappedSpecItems.slice(0, 5).map(item => ({
+        id: item.id,
+        text: item.text?.substring(0, 50),
+        selectorKey: item.selectorKey,
+      })),
+    });
+
     for (const item of unmappedSpecItems) {
       if (!item.text) continue;
       const expected = item.text.trim();
+      const expectedNorm = normalizeText(expected);
+      
+      console.log('[DEBUG] textStrictRule - SpecItem 처리 시작:', {
+        id: item.id,
+        text: expected.substring(0, 50),
+        platformsToCheck: platformsToCheck.map(p => p.platform),
+      });
 
-      let match = findMatchingNode(item, docs, index);
-      if (!match) {
-        const strippedText = stripUiTypeWords(expected);
-        if (strippedText && strippedText !== expected && strippedText.length >= 2) {
-          match = findMatchingNode({ ...item, text: strippedText }, docs, index);
-          if (match) {
-            continue;
+      let hasMatch = false;
+      let bestMatch: { node: UUMNode; platform: string; similarity: number } | null = null;
+
+      for (const { doc, platform } of platformsToCheck) {
+        if (!doc) continue;
+        
+        // 정확한 텍스트 매칭 확인
+        const exactMatch = doc.nodes.find((node) => {
+          const nodeText = normalizeText(node.text || node.name || '');
+          return nodeText === expectedNorm && nodeText.length > 0;
+        });
+
+        if (exactMatch) {
+          hasMatch = true;
+          break;
+        }
+
+        // 짧은 텍스트(10자 미만)의 경우 단순 포함 확인
+        // 예: "탈퇴"가 "카카오웹툰 탈퇴하기"에 포함되어 있는지 확인
+        if (expectedNorm.length < 10) {
+          const shortTextMatch = doc.nodes.find((node) => {
+            const nodeText = normalizeText(node.text || node.name || '');
+            // Spec 텍스트가 Web 텍스트에 포함되어 있는지 확인
+            if (nodeText.includes(expectedNorm)) {
+              // 짧은 텍스트의 경우 문맥 검증을 완화
+              // 앞뒤 중 하나라도 공백이나 문장 부호가 있으면 매칭으로 인정
+              const index = nodeText.indexOf(expectedNorm);
+              const before = nodeText.substring(Math.max(0, index - 5), index);
+              const after = nodeText.substring(index + expectedNorm.length, index + expectedNorm.length + 5);
+              // 앞이 문장 시작이거나 공백/문장부호로 끝나면 OK
+              // 또는 뒤가 문장 끝이거나 공백/문장부호로 시작하면 OK
+              const isValidContext = (before === '' || /[\s.,!?]/.test(before[before.length - 1])) ||
+                                    (after === '' || /[\s.,!?]/.test(after[0]));
+              return isValidContext;
+            }
+            return false;
+          });
+
+          if (shortTextMatch) {
+            console.log('[DEBUG] textStrictRule - 짧은 텍스트 매칭 성공:', {
+              specText: expected.substring(0, 50),
+              platform,
+              matched: true,
+            });
+            hasMatch = true;
+            break;
+          }
+        }
+
+        // 부분 문자열 포함 확인 (매우 엄격한 조건)
+        // Web DOM의 텍스트가 합쳐져 있을 수 있지만, 실제로는 다른 텍스트인데 부분 문자열이 포함될 수 있으므로 매우 엄격하게 검사
+        const partialMatch = doc.nodes.find((node) => {
+          const nodeText = normalizeText(node.text || node.name || '');
+          
+          // Spec 텍스트가 Web 텍스트에 포함되어 있는지 확인
+          // 조건: Spec 텍스트가 10자 이상이고, Web 텍스트가 Spec 텍스트보다 충분히 길어야 함
+          if (expectedNorm.length >= 10 && nodeText.length >= expectedNorm.length * 0.8) {
+            // 핵심 키워드 추출 (2자 이상의 단어만)
+            const specWords = expectedNorm.split(' ').filter(w => w.length > 2);
+            const nodeWords = nodeText.split(' ').filter(w => w.length > 2);
+            
+            // 핵심 키워드의 100% 매칭 필요 (모든 핵심 키워드가 포함되어야 함)
+            const matchedWords = specWords.filter(word => nodeWords.includes(word));
+            if (specWords.length > 0 && matchedWords.length === specWords.length) {
+              // 전체 Spec 텍스트가 Web 텍스트에 포함되어 있는지 확인
+              if (nodeText.includes(expectedNorm)) {
+                // 추가 검증: 매칭된 부분이 문장의 시작이나 끝에 있는지 확인
+                const index = nodeText.indexOf(expectedNorm);
+                const before = nodeText.substring(Math.max(0, index - 5), index);
+                const after = nodeText.substring(index + expectedNorm.length, index + expectedNorm.length + 5);
+                // 앞뒤가 공백이나 문장 부호로 시작/끝나면 더 신뢰할 수 있음
+                const isValidContext = (before === '' || /[\s.,!?]/.test(before[before.length - 1])) &&
+                                      (after === '' || /[\s.,!?]/.test(after[0]));
+                return isValidContext;
+              }
+            }
+          }
+          return false;
+        });
+
+        if (partialMatch) {
+          console.log('[DEBUG] textStrictRule - 부분 문자열 매칭 성공:', {
+            specText: expected.substring(0, 50),
+            platform,
+            matched: true,
+          });
+          hasMatch = true;
+          break;
+        }
+
+        // 유사도 기반 매칭 (매우 엄격한 조건)
+        // 실제로는 다른 텍스트인데 매칭되는 것을 방지하기 위해 매우 엄격한 검증 필요
+        for (const node of doc.nodes) {
+          const nodeText = [node.text, node.name].filter(Boolean).join(' ');
+          if (!nodeText) continue;
+
+          const nodeTextNorm = normalizeText(nodeText);
+          const similarity = calculateTextSimilarity(expected, nodeText);
+          
+          // 핵심 키워드 추출 (2자 이상의 단어만)
+          const expectedWords = expectedNorm.split(' ').filter(w => w.length > 2);
+          const nodeWords = nodeTextNorm.split(' ').filter(w => w.length > 2);
+          
+          // 핵심 키워드가 모두 포함되어 있는지 확인 (100% 매칭 필요)
+          const matchedKeywords = expectedWords.filter(word => nodeWords.includes(word));
+          const keywordMatchRatio = expectedWords.length > 0 ? matchedKeywords.length / expectedWords.length : 0;
+          
+          // 텍스트 길이 비율 계산
+          const lengthRatio = expectedNorm.length > 0 
+            ? Math.min(expectedNorm.length, nodeTextNorm.length) / Math.max(expectedNorm.length, nodeTextNorm.length)
+            : 0;
+          
+          // 매우 엄격한 조건:
+          // 1. 유사도가 0.85 이상 (0.7에서 상향)
+          // 2. 핵심 키워드의 100% 매칭 (80%에서 상향) - 모든 핵심 키워드가 포함되어야 함
+          // 3. 길이 비율이 0.8 이상 (0.7에서 상향) - 텍스트 길이가 비슷해야 함
+          // 4. Spec 텍스트가 Web 텍스트에 포함되거나, Web 텍스트가 Spec 텍스트에 포함되어야 함
+          const isSubstringMatch = nodeTextNorm.includes(expectedNorm) || expectedNorm.includes(nodeTextNorm);
+          
+          if (similarity >= 0.85 && keywordMatchRatio >= 1.0 && lengthRatio >= 0.8 && isSubstringMatch) {
+            if (!bestMatch || similarity > bestMatch.similarity) {
+              bestMatch = { node, platform, similarity };
+              hasMatch = true;
+            }
+          } else {
+            // 매칭 실패 로그
+            console.log('[DEBUG] textStrictRule - 유사도 매칭 실패:', {
+              specText: expected.substring(0, 50),
+              nodeText: nodeText.substring(0, 50),
+              similarity: similarity.toFixed(2),
+              keywordMatchRatio: keywordMatchRatio.toFixed(2),
+              lengthRatio: lengthRatio.toFixed(2),
+              isSubstringMatch,
+              expectedWords,
+              matchedKeywords,
+            });
           }
         }
       }
 
-      if (!match) {
+      // UI 타입 단어 제거 후 재시도
+      if (!hasMatch) {
+        const strippedText = stripUiTypeWords(expected);
+        if (strippedText && strippedText !== expected && strippedText.length >= 2) {
+          const strippedNorm = normalizeText(strippedText);
+          
+          for (const { doc, platform } of platformsToCheck) {
+            if (!doc) continue;
+
+            const exactMatch = doc.nodes.find((node) => {
+              const nodeText = normalizeText(node.text || node.name || '');
+              return nodeText === strippedNorm && nodeText.length > 0;
+            });
+
+            if (exactMatch) {
+              hasMatch = true;
+              break;
+            }
+
+            // 부분 문자열 포함 확인 (매우 엄격한 매칭)
+            const partialMatch = doc.nodes.find((node) => {
+              const nodeText = normalizeText(node.text || node.name || '');
+              if (strippedNorm.length >= 10 && nodeText.length >= strippedNorm.length * 0.8) {
+                // 핵심 키워드 추출 (2자 이상의 단어만)
+                const specWords = strippedNorm.split(' ').filter(w => w.length > 2);
+                const nodeWords = nodeText.split(' ').filter(w => w.length > 2);
+                
+                // 핵심 키워드의 100% 매칭 필요 (모든 핵심 키워드가 포함되어야 함)
+                const matchedWords = specWords.filter(word => nodeWords.includes(word));
+                if (specWords.length > 0 && matchedWords.length === specWords.length) {
+                  // 전체 Spec 텍스트가 Web 텍스트에 포함되어 있는지 확인
+                  if (nodeText.includes(strippedNorm)) {
+                    // 추가 검증: 매칭된 부분이 문장의 시작이나 끝에 있는지 확인
+                    const index = nodeText.indexOf(strippedNorm);
+                    const before = nodeText.substring(Math.max(0, index - 5), index);
+                    const after = nodeText.substring(index + strippedNorm.length, index + strippedNorm.length + 5);
+                    const isValidContext = (before === '' || /[\s.,!?]/.test(before[before.length - 1])) &&
+                                          (after === '' || /[\s.,!?]/.test(after[0]));
+                    return isValidContext;
+                  }
+                }
+              }
+              return false;
+            });
+
+            if (partialMatch) {
+              hasMatch = true;
+              break;
+            }
+
+            for (const node of doc.nodes) {
+              const nodeText = [node.text, node.name].filter(Boolean).join(' ');
+              if (!nodeText) continue;
+
+              const nodeTextNorm = normalizeText(nodeText);
+              const similarity = calculateTextSimilarity(strippedText, nodeText);
+              
+              // 핵심 키워드 추출 및 매칭 확인
+              const strippedWords = strippedNorm.split(' ').filter(w => w.length > 2);
+              const nodeWords = nodeTextNorm.split(' ').filter(w => w.length > 2);
+              const matchedKeywords = strippedWords.filter(word => nodeWords.includes(word));
+              const keywordMatchRatio = strippedWords.length > 0 ? matchedKeywords.length / strippedWords.length : 0;
+              
+              // 길이 비율 계산
+              const lengthRatio = strippedNorm.length > 0
+                ? Math.min(strippedNorm.length, nodeTextNorm.length) / Math.max(strippedNorm.length, nodeTextNorm.length)
+                : 0;
+              
+              // 부분 문자열 매칭 확인
+              const isSubstringMatch = nodeTextNorm.includes(strippedNorm) || strippedNorm.includes(nodeTextNorm);
+              
+              // 매우 엄격한 조건: 유사도 0.85 이상, 키워드 100% 매칭, 길이 비율 0.8 이상, 부분 문자열 매칭
+              if (similarity >= 0.85 && keywordMatchRatio >= 1.0 && lengthRatio >= 0.8 && isSubstringMatch) {
+                hasMatch = true;
+                break;
+              }
+            }
+            if (hasMatch) break;
+          }
+        }
+      }
+
+      console.log('[DEBUG] textStrictRule - 매칭 결과:', {
+        specText: expected.substring(0, 50),
+        hasMatch,
+        bestMatch: bestMatch ? {
+          platform: bestMatch.platform,
+          similarity: bestMatch.similarity,
+          text: (bestMatch.node.text || bestMatch.node.name)?.substring(0, 50),
+        } : null,
+      });
+
+      if (!hasMatch) {
         const specFulltextHits = countSpecFulltextHits(expected);
         let decisionReasonCode: 'SPEC_CONFIRMED_MISSING' | 'SPEC_PRESENT_BUT_NORMALIZATION_FAIL' = 'SPEC_CONFIRMED_MISSING';
         let decisionExplanation = '';
+
+        // 플랫폼별로 매칭 실패 여부 확인
+        // hasMatch가 false라는 것은 platformsToCheck에 포함된 모든 플랫폼에서 매칭에 실패했다는 의미
+        // 따라서 platformsToCheck에 포함된 플랫폼을 모두 missingPlatforms에 추가
+        const missingPlatforms: string[] = [];
+        
+        // platformsToCheck에 포함된 플랫폼은 모두 매칭 실패 (hasMatch가 false이므로)
+        for (const { platform } of platformsToCheck) {
+          missingPlatforms.push(platform);
+        }
+        
+        // platformsToCheck에 포함되지 않은 플랫폼 (노드가 비어있는 경우)도 추가
+        if (webDoc && webDoc.nodes.length === 0) {
+          missingPlatforms.push('WEB');
+        }
+        if (figmaDoc && figmaDoc.nodes.length === 0) {
+          missingPlatforms.push('FIGMA');
+        }
+        if (androidDoc && androidDoc.nodes.length === 0) {
+          missingPlatforms.push('ANDROID');
+        }
+        if (iosDoc && iosDoc.nodes.length === 0) {
+          missingPlatforms.push('IOS');
+        }
 
         if (specFulltextHits > 0) {
           decisionReasonCode = 'SPEC_PRESENT_BUT_NORMALIZATION_FAIL';
           decisionExplanation = `Spec 전체 텍스트에서 "${expected}"가 ${specFulltextHits}번 발견되었지만 정규화 과정에서 매칭에 실패했습니다.`;
         } else {
           decisionReasonCode = 'SPEC_CONFIRMED_MISSING';
-          decisionExplanation = `Spec에 정의된 텍스트 "${expected}"가 Figma/Web/앱에 존재하지 않습니다.`;
+          decisionExplanation = `Spec에 정의된 텍스트 "${expected}"가 ${missingPlatforms.length > 0 ? missingPlatforms.join('/') : platformsToCheck.map(p => p.platform).join('/')}에 존재하지 않습니다.`;
         }
+
+        // Web 문서에서 해당 텍스트를 포함하는 노드 찾기 (디버깅용)
+        const webNodesContainingText = webDoc ? webDoc.nodes.filter(node => {
+          const nodeText = normalizeText(node.text || node.name || '');
+          return nodeText.includes(expectedNorm) && nodeText.length > expectedNorm.length;
+        }).slice(0, 3) : [];
+
+        console.log('[DEBUG] textStrictRule - finding 생성:', {
+          specText: expected.substring(0, 50),
+          platformsChecked: platformsToCheck.map(p => p.platform),
+          missingPlatforms,
+          webDocNodesCount: webDoc?.nodes.length || 0,
+          webNodesContainingText: webNodesContainingText.map(n => ({
+            text: (n.text || n.name)?.substring(0, 100),
+            path: n.path,
+          })),
+        });
 
         findings.push({
           id: `text.strict:${item.id}`,
           severity: 'MAJOR',
           category: 'TEXT_MISMATCH',
-          description: `스펙 텍스트가 미존재: "${expected}"`,
+          description: missingPlatforms.length > 0 
+            ? `스펙 텍스트가 ${missingPlatforms.join('/')}에 미존재: "${expected}"`
+            : `스펙 텍스트가 미존재: "${expected}"`,
           evidence: {
             expected,
-            checkedDocs: nonSpecDocs.map((d) => d.platform),
+            checkedDocs: platformsToCheck.map((p) => p.platform),
+            missingPlatforms: missingPlatforms.length > 0 ? missingPlatforms : undefined,
             matchType: null,
             specItem: item,
           },
@@ -496,7 +874,9 @@ export const textStrictRule: DiffRule = {
           meta: {
             ...item.meta,
             ruleName: 'text.strict',
-            ruleReason: `Spec에 정의된 텍스트 "${expected}"가 Figma/Web/앱에 존재하지 않음`,
+            ruleReason: missingPlatforms.length > 0
+              ? `Spec에 정의된 텍스트 "${expected}"가 ${missingPlatforms.join('/')}에 존재하지 않음`
+              : `Spec에 정의된 텍스트 "${expected}"가 ${platformsToCheck.map(p => p.platform).join('/')}에 존재하지 않음`,
             recommendedAction: 'design-update' as const,
           },
           specSideEvidence: {
@@ -515,62 +895,67 @@ export const textStrictRule: DiffRule = {
           diffType: 'UNMAPPED',
           requirement: item.sectionPath,
         });
-      } else if (match.matchType === 'similarity') {
-        const similarity = calculateTextSimilarity(expected, match.node.text || match.node.name || '');
-        if (similarity < 0.9) {
-          const foundText = match.node.text || match.node.name || '';
-          const specFulltextHits = countSpecFulltextHits(expected);
-          
-          findings.push({
-            id: `text.strict:${item.id}`,
-            severity: similarity < 0.7 ? 'MAJOR' : 'MINOR',
-            category: 'TEXT_MISMATCH',
-            description: `스펙 텍스트 유사도 낮음 (${(similarity * 100).toFixed(0)}%): "${expected}" vs "${foundText}"`,
-            evidence: {
-              expected,
-              found: foundText,
-              similarity,
-              matchType: match.matchType,
-              specItem: item,
-            },
-            relatedSpecId: item.id,
-            meta: {
-              ...item.meta,
-              ruleName: 'text.strict',
-              ruleReason: `Spec 텍스트 "${expected}"와 실제 텍스트 "${foundText}"의 유사도가 낮음 (${(similarity * 100).toFixed(0)}%)`,
-              recommendedAction: similarity < 0.7 ? 'design-update' as const : 'spec-update' as const,
-            },
-            specSideEvidence: {
-              spec_section: item.meta?.section,
-              spec_row: item.meta?.row,
-              spec_feature: item.meta?.feature,
-              spec_text: expected,
-              spec_items_count: specItemsCount,
-              spec_fulltext_hits: specFulltextHits,
-            },
-            figmaSideEvidence: match.node.platform === 'FIGMA' ? {
-              figma_text: foundText,
-              figma_page: match.node.meta?.page,
-              figma_frame_path: match.node.path,
-              figma_layer_name: match.node.name,
-            } : undefined,
-            matchingEvidence: {
-              match_candidates: [{
-                text: foundText,
-                section: item.meta?.section,
-                row: item.meta?.row,
-                similarity,
-              }],
-            },
-            decisionMetadata: {
-              rule_name: 'text.strict',
-              decision_reason_code: 'SPEC_PRESENT_BUT_NORMALIZATION_FAIL',
-              decision_explanation: `Spec 텍스트 "${expected}"와 실제 텍스트 "${foundText}"의 유사도가 낮아 정규화 과정에서 매칭에 실패했습니다. (유사도: ${(similarity * 100).toFixed(0)}%)`,
-            },
-            diffType: 'UNMAPPED',
-            requirement: item.sectionPath,
-          });
-        }
+      } else if (bestMatch && bestMatch.similarity < 0.9) {
+        // 유사도 매칭이지만 완전히 일치하지 않는 경우
+        const foundText = bestMatch.node.text || bestMatch.node.name || '';
+        const specFulltextHits = countSpecFulltextHits(expected);
+        
+        findings.push({
+          id: `text.strict:${item.id}`,
+          severity: bestMatch.similarity < 0.7 ? 'MAJOR' : 'MINOR',
+          category: 'TEXT_MISMATCH',
+          description: `스펙 텍스트 유사도 낮음 (${(bestMatch.similarity * 100).toFixed(0)}%): "${expected}" vs "${foundText}"`,
+          evidence: {
+            expected,
+            found: foundText,
+            similarity: bestMatch.similarity,
+            matchType: 'similarity',
+            specItem: item,
+            platform: bestMatch.platform,
+          },
+          relatedSpecId: item.id,
+          meta: {
+            ...item.meta,
+            ruleName: 'text.strict',
+            ruleReason: `Spec 텍스트 "${expected}"와 ${bestMatch.platform}의 "${foundText}"의 유사도가 낮음 (${(bestMatch.similarity * 100).toFixed(0)}%)`,
+            recommendedAction: bestMatch.similarity < 0.7 ? 'design-update' as const : 'spec-update' as const,
+          },
+          specSideEvidence: {
+            spec_section: item.meta?.section,
+            spec_row: item.meta?.row,
+            spec_feature: item.meta?.feature,
+            spec_text: expected,
+            spec_items_count: specItemsCount,
+            spec_fulltext_hits: specFulltextHits,
+          },
+          figmaSideEvidence: bestMatch.platform === 'FIGMA' ? {
+            figma_text: foundText,
+            figma_page: bestMatch.node.meta?.page,
+            figma_frame_path: bestMatch.node.path,
+            figma_layer_name: bestMatch.node.name,
+          } : undefined,
+          webSideEvidence: bestMatch.platform === 'WEB' ? {
+            web_text: foundText,
+            web_path: bestMatch.node.path,
+            web_selector: bestMatch.node.selector,
+          } : undefined,
+          matchingEvidence: {
+            match_candidates: [{
+              text: foundText,
+              section: item.meta?.section,
+              row: item.meta?.row,
+              similarity: bestMatch.similarity,
+              platform: bestMatch.platform,
+            }],
+          },
+          decisionMetadata: {
+            rule_name: 'text.strict',
+            decision_reason_code: 'SPEC_PRESENT_BUT_NORMALIZATION_FAIL',
+            decision_explanation: `Spec 텍스트 "${expected}"와 ${bestMatch.platform}의 "${foundText}"의 유사도가 낮아 정규화 과정에서 매칭에 실패했습니다. (유사도: ${(bestMatch.similarity * 100).toFixed(0)}%)`,
+          },
+          diffType: 'UNMAPPED',
+          requirement: item.sectionPath,
+        });
       }
     }
     return findings;
@@ -768,14 +1153,21 @@ export const structureRule: DiffRule = {
         });
         continue;
       }
-      const hasRoot = d.nodes.some((n) => n.role === 'DOCUMENT' || n.path?.endsWith('/0') || n.path?.includes('/root'));
+      // 루트 노드 감지: DOCUMENT role, /0로 끝나는 path, /root 포함, 또는 /html/body (Web DOM)
+      const hasRoot = d.nodes.some((n) => 
+        n.role === 'DOCUMENT' || 
+        n.path?.endsWith('/0') || 
+        n.path?.includes('/root') ||
+        n.path === '/html/body' ||
+        (d.platform === 'WEB' && n.path?.startsWith('/html/body'))
+      );
       if (!hasRoot) {
         findings.push({
           id: `structure:root-missing:${d.platform}`,
           severity: 'INFO',
           category: 'STRUCTURE',
           description: `${d.platform} 문서에 루트 추정 노드가 없음`,
-          evidence: { firstNodes: d.nodes.slice(0, 3) },
+          evidence: { firstNodes: d.nodes.slice(0, 3), platform: d.platform },
         });
       }
     }
@@ -847,6 +1239,17 @@ export const reverseComparisonRule: DiffRule = {
 
       // 너무 짧거나 일반적인 단어는 제외
       if (normalizedFigmaText.length < 2) continue;
+      
+      // 특수 문자만 있는 텍스트 제외 (예: "·", "-", ".", "•" 등)
+      const trimmedText = figmaText.trim();
+      if (trimmedText.length <= 2 && /^[·•\-\.,;:!?()\[\]{}'"`~@#$%^&*+=|\\/<>_]+$/.test(trimmedText)) {
+        continue;
+      }
+      
+      // 숫자만 있는 텍스트 제외 (예: "320", "2025" 등)
+      if (/^\d+$/.test(trimmedText)) {
+        continue;
+      }
       const commonWords = [
         'the',
         'a',
@@ -1007,7 +1410,13 @@ export const reverseComparisonRule: DiffRule = {
         );
 
         // 해상도 라벨(예: "320 해상도")은 메타데이터로 간주
-        const isResolutionLabel = /(^\d{3,4}\s*해상도$)|(\b해상도\b)/i.test(normalizedFigmaText);
+        const isResolutionLabel = /(^\d{3,4}\s*해상도$)|(\b해상도\b)|(^\d{3,4}\s*px$)|(^\d{3,4}\s*resolution$)/i.test(normalizedFigmaText);
+        
+        // "Last Update" 같은 메타데이터 제외
+        const isMetadataLabel = /^(last\s*update|업데이트|update\s*date|날짜|date|버전|version)/i.test(normalizedFigmaText);
+        
+        // 상태 라벨 제외 (예: "비활성화", "활성화", "미노출", "노출" 등)
+        const isStateLabel = /(비활성화|활성화|미노출|노출|비활성|활성|disabled|enabled|hidden|visible)$/i.test(normalizedFigmaText);
 
         // CONTENT_TEXT 체크 (작가명, 해시태그, 작품명 등)
         const contentKeywords = ['작가', '작품', '해시태그', '태그', 'author', 'hashtag', 'tag', '작품명'];
@@ -1015,11 +1424,14 @@ export const reverseComparisonRule: DiffRule = {
           normalizedFigmaText.includes(keyword.toLowerCase())
         );
 
-        if (isAnnotation || isResolutionLabel) {
+        // 메타데이터/상태 라벨은 finding 생성하지 않음 (continue로 건너뛰기)
+        if (isResolutionLabel || isMetadataLabel || isStateLabel) {
+          continue; // finding 생성하지 않고 다음 노드로
+        }
+        
+        if (isAnnotation) {
           decisionReasonCode = 'FIGMA_ANNOTATION_SUSPECT';
-          decisionExplanation = isResolutionLabel
-            ? `Figma 텍스트 "${figmaText}"는 해상도 라벨(메타데이터)로 보입니다.`
-            : `Figma 텍스트 "${figmaText}"는 툴팁/설명 등 주석성 텍스트로 보입니다.`;
+          decisionExplanation = `Figma 텍스트 "${figmaText}"는 툴팁/설명 등 주석성 텍스트로 보입니다.`;
         } else if (isContentText) {
           decisionReasonCode = 'CONTENT_TEXT';
           decisionExplanation = `Figma 텍스트 "${figmaText}"는 작가명/해시태그/작품명 등 콘텐츠 텍스트로 보입니다.`;
@@ -1043,7 +1455,7 @@ export const reverseComparisonRule: DiffRule = {
           recommendedAction = 'design-update';
         } else if (bestMatch && bestMatch.similarity < 0.3) {
           recommendedAction = 'ignore-noise';
-        } else if (decisionReasonCode === 'FIGMA_ANNOTATION_SUSPECT' || decisionReasonCode === 'CONTENT_TEXT') {
+        } else if (decisionReasonCode === 'FIGMA_ANNOTATION_SUSPECT' || decisionReasonCode === 'CONTENT_TEXT' || isMetadataLabel || isStateLabel) {
           recommendedAction = 'ignore-noise';
         }
         
