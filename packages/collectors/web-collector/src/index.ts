@@ -25,10 +25,22 @@ export const WebCollector = {
       );
     }
 
-    const browser = await browserType.launch({ headless: !headed });
-    const context = await browser.newContext();
+    const browser = await browserType.launch({ 
+      headless: !headed,
+      args: ['--no-sandbox', '--disable-setuid-sandbox'], // 서버 환경에서 필요한 옵션
+    });
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 720 },
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    });
     const page = await context.newPage();
-    await page.goto(url, { waitUntil, timeout: timeoutMs });
+    
+    try {
+      await page.goto(url, { waitUntil, timeout: timeoutMs });
+    } catch (gotoError: any) {
+      await browser.close();
+      throw new Error(`페이지 로딩 실패: ${gotoError.message}`);
+    }
 
     const snapshot = await page.evaluate(() => {
       function getPath(el: Element): string {
