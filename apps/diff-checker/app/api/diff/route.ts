@@ -276,7 +276,9 @@ async function deriveSpecItemsFromMarkdown(specText: string): Promise<{ items: S
     const processedLine = parsed.text;
     
     // HTML 태그 제거 (표는 이미 처리했으므로)
-    const cleanLine = processedLine.replace(/<[^>]+>/g, '').trim();
+    const rawLine = processedLine.replace(/<[^>]+>/g, '').trim();
+    // DOCX 불릿 기호 제거: •, ·, ▪, ○, -, * 등이 줄 앞에 붙어 있으면 제거
+    const cleanLine = rawLine.replace(/^[•·▪▸▶○◦–—\-\*]\s*/, '').trim();
     if (!cleanLine) continue;
     
     // Phase-2: selectorKey 추출
