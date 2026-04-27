@@ -150,14 +150,29 @@ export function toHtml(findings: DiffFinding[], phase: number): string {
     };
     
     const findingsDetails = groupFindings.map(f => {
-      const figmaText = f.evidence?.figmaText || f.evidence?.expected || '';
       const specItem = f.evidence?.specItem;
-      const specText = specItem?.text || f.evidence?.expected || f.meta?.section || '';
+      const specText = (f as any).specSideEvidence?.spec_text || specItem?.text || f.evidence?.expected || f.meta?.section || '';
       const candidates = f.evidence?.candidates || [];
       const ruleName = f.meta?.ruleName || f.decisionMetadata?.rule_name || 'unknown';
       const ruleReason = f.meta?.ruleReason || f.decisionMetadata?.decision_explanation || '';
       const action = f.meta?.recommendedAction;
-      
+
+      // 비교 대상 플랫폼 감지
+      const platformRaw: string =
+        (f as any).webSideEvidence ? 'WEB' :
+        (f as any).figmaSideEvidence ? 'FIGMA' :
+        f.evidence?.platform ||
+        f.evidence?.checkedDocs?.[0] || '';
+      const platformLabelMap: Record<string, string> = {
+        WEB: 'Web', FIGMA: 'Figma', ANDROID: 'Android', IOS: 'iOS',
+      };
+      const targetLabel = platformLabelMap[platformRaw] || platformRaw || '구현체';
+      const targetText =
+        (f as any).webSideEvidence?.web_text ||
+        (f as any).figmaSideEvidence?.figma_text ||
+        f.evidence?.found ||
+        f.evidence?.figmaText || '';
+
       return `
         <div class="finding-detail">
           <div class="finding-header">
@@ -176,15 +191,23 @@ export function toHtml(findings: DiffFinding[], phase: number): string {
                 ${specItem?.meta?.feature ? `<span class="meta-tag">기능: ${escapeHtml(specItem.meta.feature)}</span>` : f.meta?.feature ? `<span class="meta-tag">기능: ${escapeHtml(f.meta.feature)}</span>` : ''}
               </div>
             </div>
+            ${targetText ? `
             <div class="evidence-item">
-              <strong>🎨 Figma 매칭 후보:</strong>
+              <strong>🔍 ${escapeHtml(targetLabel)} 매칭 결과:</strong>
               <div class="evidence-content">
-                ${candidates.length > 0 
+                <div style="font-weight: 500; margin-bottom: 4px;">${escapeHtml(targetText)}</div>
+              </div>
+            </div>` : ''}
+            <div class="evidence-item">
+              <strong>🔎 매칭 후보:</strong>
+              <div class="evidence-content">
+                ${candidates.length > 0
                   ? candidates.map((c: any, idx: number) => `
                     <div class="candidate-item">
                       <span class="candidate-rank">#${idx + 1}</span>
                       <span class="candidate-text">${escapeHtml(c.text || 'N/A')}</span>
                       <span class="candidate-similarity">유사도: ${((c.similarity || 0) * 100).toFixed(0)}%</span>
+                      ${c.platform ? `<span class="meta-tag" style="margin-left: 8px;">${escapeHtml(platformLabelMap[c.platform] || c.platform)}</span>` : ''}
                       ${c.specId ? `<span class="meta-tag" style="margin-left: 8px;">${escapeHtml(c.specId.substring(0, 20))}</span>` : ''}
                     </div>
                   `).join('')
