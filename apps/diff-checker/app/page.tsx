@@ -527,7 +527,8 @@ export default function Page() {
       setSelectedSections([]); // 초기에는 선택 없음
       setPdfSelectedText('');
       
-      alert('PDF 내용을 불러왔습니다. 섹션을 선택하여 원하는 영역만 추출할 수 있습니다.');
+      const fileType = fileName.endsWith('.docx') ? 'DOCX' : 'PDF';
+      alert(`${fileType} 내용을 불러왔습니다. 섹션을 선택하여 원하는 영역만 추출할 수 있습니다.`);
     } catch (e: any) {
       alert(e?.message ?? 'PDF 파싱에 실패했습니다.');
     } finally {
@@ -1068,7 +1069,7 @@ export default function Page() {
                         : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50'
                     }`}
                   >
-                    PDF 업로드
+                    파일 업로드
                   </button>
                 </div>
                 {specInputMode === 'text' && (
