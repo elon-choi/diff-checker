@@ -1881,26 +1881,44 @@ export default function Page() {
                     {/* Findings in Card */}
                     <div className="space-y-2">
                       {group.findings.map((f) => {
-                        // Phase 1: Context 필드 추출
-                        const specText = (f as any).specSideEvidence?.spec_text || 
-                                        (f as any).evidence?.expected || 
-                                        (f as any).evidence?.specItem?.text;
-                        const figmaText = (f as any).figmaSideEvidence?.figma_text || 
-                                         (f as any).evidence?.found || 
-                                         (f as any).evidence?.figmaText ||
-                                         (f as any).evidence?.figmaNode?.text;
-                        const specPath = (f as any).specSideEvidence?.spec_section || 
-                                        (f as any).requirement || 
-                                        (f as any).meta?.section;
-                        const figmaPath = (f as any).figmaSideEvidence?.figma_frame_path || 
-                                         (f as any).evidence?.figmaNode?.path ||
-                                         (f as any).evidence?.scope;
-                        // diffType 추론: 원본 diffType이 있으면 사용, 없으면 category와 evidence 기반으로 추론
-                        let diffType = (f as any).diffType;
+                        const fa = f as any;
+
+                        // Spec 텍스트
+                        const specText = fa.specSideEvidence?.spec_text ||
+                                         fa.evidence?.expected ||
+                                         fa.evidence?.specItem?.text;
+
+                        // 비교 대상 플랫폼 감지 및 텍스트/경로 추출
+                        const platformRaw: string =
+                          fa.webSideEvidence ? 'WEB' :
+                          fa.figmaSideEvidence ? 'FIGMA' :
+                          fa.evidence?.platform ||
+                          fa.matchingEvidence?.match_candidates?.[0]?.platform ||
+                          fa.evidence?.checkedDocs?.[0] || '';
+
+                        const platformLabel: Record<string, string> = {
+                          WEB: 'Web', FIGMA: 'Figma', ANDROID: 'Android', IOS: 'iOS',
+                        };
+                        const targetLabel = platformLabel[platformRaw] || platformRaw || '구현체';
+
+                        const targetText =
+                          fa.webSideEvidence?.web_text ||
+                          fa.figmaSideEvidence?.figma_text ||
+                          fa.evidence?.found ||
+                          fa.evidence?.figmaText ||
+                          fa.evidence?.figmaNode?.text;
+
+                        const targetPath =
+                          fa.webSideEvidence?.web_path ||
+                          fa.figmaSideEvidence?.figma_frame_path ||
+                          fa.evidence?.figmaNode?.path ||
+                          fa.evidence?.scope;
+
+                        // diffType 추론
+                        let diffType = fa.diffType;
                         if (!diffType) {
                           if (f.category === 'MISSING_ELEMENT') {
-                            // Spec에 있지만 Figma에 없으면 MISSING, Figma에 있지만 Spec에 없으면 EXTRA
-                            diffType = (f as any).figmaSideEvidence?.figma_text && !(f as any).specSideEvidence?.spec_text ? 'EXTRA' : 'MISSING';
+                            diffType = targetText && !fa.specSideEvidence?.spec_text ? 'EXTRA' : 'MISSING';
                           } else if (f.category === 'TEXT_MISMATCH') {
                             diffType = 'MISMATCH';
                           } else if (f.category === 'VISIBILITY') {
@@ -1910,19 +1928,18 @@ export default function Page() {
                           } else if (f.category === 'STRUCTURE') {
                             diffType = 'UNMAPPED';
                           } else {
-                            // 기본값: evidence를 기반으로 추론
-                            if ((f as any).evidence?.figmaText && !(f as any).evidence?.expected) {
+                            if (fa.evidence?.figmaText && !fa.evidence?.expected) {
                               diffType = 'EXTRA';
-                            } else if ((f as any).evidence?.expected && !(f as any).evidence?.found) {
+                            } else if (fa.evidence?.expected && !fa.evidence?.found) {
                               diffType = 'MISSING';
-                            } else if ((f as any).evidence?.expected && (f as any).evidence?.found) {
+                            } else if (fa.evidence?.expected && fa.evidence?.found) {
                               diffType = 'MISMATCH';
                             } else {
                               diffType = 'UNMAPPED';
                             }
                           }
                         }
-                        
+
                         return (
                           <div key={f.id} className="bg-white rounded p-3 border-l-4" style={{
                             borderColor: diffType === 'MISSING' ? '#dc2626' :
@@ -1946,27 +1963,27 @@ export default function Page() {
                               </span>
                               <span className="text-xs text-gray-500">{f.severity}</span>
                             </div>
-                            
-                            {/* Spec vs Figma 비교 */}
+
+                            {/* Spec vs 비교 대상 */}
                             <div className="space-y-1 text-sm">
-                              {figmaText && (
+                              {targetText && (
                                 <div className="flex items-start gap-2">
-                                  <span className="text-gray-600 min-w-[60px]">Figma:</span>
-                                  <span className="text-gray-800 flex-1">{figmaText}</span>
+                                  <span className="text-gray-600 min-w-[60px]">{targetLabel}:</span>
+                                  <span className="text-gray-800 flex-1">{targetText}</span>
                                 </div>
                               )}
                               {specText && (
                                 <div className="flex items-start gap-2">
                                   <span className="text-gray-600 min-w-[60px]">Spec:</span>
-                                  <span className={`flex-1 ${figmaText && specText !== figmaText ? 'text-orange-700 font-semibold' : 'text-gray-800'}`}>
-                                    {specText || '없음'}
+                                  <span className={`flex-1 ${targetText && specText !== targetText ? 'text-orange-700 font-semibold' : 'text-gray-800'}`}>
+                                    {specText}
                                   </span>
                                 </div>
                               )}
-                              {figmaPath && (
+                              {targetPath && (
                                 <div className="flex items-start gap-2 text-xs text-gray-500 mt-1">
                                   <span>↳</span>
-                                  <span>Figma path: {figmaPath}</span>
+                                  <span>{targetLabel} path: {targetPath}</span>
                                 </div>
                               )}
                             </div>
