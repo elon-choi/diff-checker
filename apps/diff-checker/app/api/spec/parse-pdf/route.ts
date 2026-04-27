@@ -1,8 +1,21 @@
 import { NextResponse } from 'next/server';
 
-// pdf-parse v2는 PDFParse 클래스를 사용해야 함
-// Next.js API 라우트는 서버 사이드에서만 실행되므로 require 사용 가능
 const { PDFParse } = require('pdf-parse');
+const mammoth = require('mammoth');
+
+async function extractTextFromPdf(buffer: Buffer): Promise<string> {
+  const parser = new PDFParse({ data: buffer });
+  const result = await parser.getText();
+  return result.text;
+}
+
+async function extractTextFromDocx(buffer: Buffer): Promise<string> {
+  const result = await mammoth.extractRawText({ buffer });
+  if (result.messages.length > 0) {
+    console.warn('[DOCX] 변환 경고:', result.messages);
+  }
+  return result.value;
+}
 
 export async function POST(req: Request) {
   try {
@@ -10,35 +23,37 @@ export async function POST(req: Request) {
     const file = formData.get('file') as File;
 
     if (!file) {
-      return NextResponse.json({ error: 'PDF 파일이 필요합니다.' }, { status: 400 });
+      return NextResponse.json({ error: '파일이 필요합니다.' }, { status: 400 });
     }
 
-    if (!file.name.toLowerCase().endsWith('.pdf')) {
-      return NextResponse.json({ error: 'PDF 파일만 업로드 가능합니다.' }, { status: 400 });
+    const fileName = file.name.toLowerCase();
+    const isPdf = fileName.endsWith('.pdf');
+    const isDocx = fileName.endsWith('.docx');
+
+    if (!isPdf && !isDocx) {
+      return NextResponse.json({ error: 'PDF 또는 DOCX 파일만 업로드 가능합니다.' }, { status: 400 });
     }
-    
+
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    // pdf-parse v2 사용법: PDFParse 클래스 인스턴스 생성 후 getText() 호출
-    const parser = new PDFParse({ data: buffer });
-    const result = await parser.getText();
-    const text = result.text;
+    const text = isPdf
+      ? await extractTextFromPdf(buffer)
+      : await extractTextFromDocx(buffer);
 
     if (!text || text.trim().length === 0) {
-      return NextResponse.json({ error: 'PDF에서 텍스트를 추출할 수 없습니다.' }, { status: 400 });
+      return NextResponse.json({ error: '파일에서 텍스트를 추출할 수 없습니다.' }, { status: 400 });
     }
 
-    // 텍스트 정리: 여러 공백을 하나로, 줄바꿈 정리
     const cleanedText = text
       .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0)
+      .map((line: string) => line.trim())
+      .filter((line: string) => line.length > 0)
       .join('\n');
 
     return NextResponse.json({ text: cleanedText });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? 'PDF 파싱에 실패했습니다.' }, { status: 500 });
+    return NextResponse.json({ error: e?.message ?? '파일 파싱에 실패했습니다.' }, { status: 500 });
   }
 }
 

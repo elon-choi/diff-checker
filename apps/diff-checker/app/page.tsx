@@ -501,8 +501,9 @@ export default function Page() {
   }
 
   async function handleSpecFileUpload(file: File) {
-    if (!file.name.toLowerCase().endsWith('.pdf')) {
-      alert('PDF 파일만 업로드 가능합니다.');
+    const fileName = file.name.toLowerCase();
+    if (!fileName.endsWith('.pdf') && !fileName.endsWith('.docx')) {
+      alert('PDF 또는 DOCX 파일만 업로드 가능합니다.');
       return;
     }
     setSpecLoading(true);
@@ -514,7 +515,7 @@ export default function Page() {
         body: formData,
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || 'PDF 파싱에 실패했습니다.');
+      if (!res.ok) throw new Error(data?.error || '파일 파싱에 실패했습니다.');
       
       const pdfText = data.text || '';
       setPdfRawText(pdfText);
@@ -1313,7 +1314,7 @@ export default function Page() {
                     <label className="block">
                       <input
                         type="file"
-                        accept=".pdf"
+                        accept=".pdf,.docx"
                         onChange={(e) => {
                           const file = e.target.files?.[0];
                           if (file) {
@@ -1325,7 +1326,7 @@ export default function Page() {
                       />
                       <div className="w-full min-h-[120px] rounded-lg border-2 border-dashed border-gray-300 flex items-center justify-center cursor-pointer hover:border-gray-400 transition-colors">
                         {specLoading ? (
-                          <span className="text-sm text-gray-500">PDF 파싱 중...</span>
+                          <span className="text-sm text-gray-500">파일 파싱 중...</span>
                         ) : specFile ? (
                           <div className="text-center">
                             <p className="text-sm font-medium text-gray-700">{specFile.name}</p>
@@ -1333,7 +1334,7 @@ export default function Page() {
                           </div>
                         ) : (
                           <div className="text-center">
-                            <p className="text-sm font-medium text-gray-700">PDF 파일을 선택하세요</p>
+                            <p className="text-sm font-medium text-gray-700">PDF 또는 DOCX 파일을 선택하세요</p>
                             <p className="text-xs text-gray-500 mt-1">또는 드래그 앤 드롭</p>
                           </div>
                         )}
