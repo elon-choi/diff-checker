@@ -6,7 +6,7 @@ function normalizeText(value?: string): string {
   return (value ?? '')
     .toString()
     .trim()
-    .replace(/^[\s•·▪▫▸▶◦–—\-\*#]+(?=\p{L})/u, '') // 줄 앞 불릿/대시 기호 제거 (•, -, * 등)
+    .replace(/^[\s•·▪▫▸▶◦–—\-\*#]+(?=\S)/u, '') // 줄 앞 불릿/대시 기호 제거 (•, -, * 등)
     .replace(/제\s+(\d+)\s+(조|항|호)/g, '제$1$2') // 조항 번호 공백 정규화 (조/항/호)
     .replace(/\s+/g, ' ')
     .toLowerCase();
