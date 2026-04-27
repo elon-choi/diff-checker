@@ -633,18 +633,10 @@ export const textStrictRule: DiffRule = {
             
             // 핵심 키워드의 100% 매칭 필요 (모든 핵심 키워드가 포함되어야 함)
             const matchedWords = specWords.filter(word => nodeWords.includes(word));
-            if (specWords.length > 0 && matchedWords.length === specWords.length) {
-              // 전체 Spec 텍스트가 Web 텍스트에 포함되어 있는지 확인
-              if (nodeText.includes(expectedNorm)) {
-                // 추가 검증: 매칭된 부분이 문장의 시작이나 끝에 있는지 확인
-                const index = nodeText.indexOf(expectedNorm);
-                const before = nodeText.substring(Math.max(0, index - 5), index);
-                const after = nodeText.substring(index + expectedNorm.length, index + expectedNorm.length + 5);
-                // 앞뒤가 공백이나 문장 부호로 시작/끝나면 더 신뢰할 수 있음
-                const isValidContext = (before === '' || /[\s.,!?]/.test(before[before.length - 1])) &&
-                                      (after === '' || /[\s.,!?]/.test(after[0]));
-                return isValidContext;
-              }
+            const keywordsMatch = specWords.length === 0 || matchedWords.length === specWords.length;
+            // 전체 포함 확인: 한국어는 단어 경계가 없으므로 순수 포함만 확인
+            if (keywordsMatch && nodeText.includes(expectedNorm)) {
+              return true;
             }
           }
           return false;
@@ -739,17 +731,10 @@ export const textStrictRule: DiffRule = {
                 
                 // 핵심 키워드의 100% 매칭 필요 (모든 핵심 키워드가 포함되어야 함)
                 const matchedWords = specWords.filter(word => nodeWords.includes(word));
-                if (specWords.length > 0 && matchedWords.length === specWords.length) {
-                  // 전체 Spec 텍스트가 Web 텍스트에 포함되어 있는지 확인
-                  if (nodeText.includes(strippedNorm)) {
-                    // 추가 검증: 매칭된 부분이 문장의 시작이나 끝에 있는지 확인
-                    const index = nodeText.indexOf(strippedNorm);
-                    const before = nodeText.substring(Math.max(0, index - 5), index);
-                    const after = nodeText.substring(index + strippedNorm.length, index + strippedNorm.length + 5);
-                    const isValidContext = (before === '' || /[\s.,!?]/.test(before[before.length - 1])) &&
-                                          (after === '' || /[\s.,!?]/.test(after[0]));
-                    return isValidContext;
-                  }
+                const keywordsMatch = specWords.length === 0 || matchedWords.length === specWords.length;
+                // 전체 포함 확인: 한국어는 단어 경계가 없으므로 순수 포함만 확인
+                if (keywordsMatch && nodeText.includes(strippedNorm)) {
+                  return true;
                 }
               }
               return false;
