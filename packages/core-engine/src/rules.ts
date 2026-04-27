@@ -578,7 +578,7 @@ export const textStrictRule: DiffRule = {
           meta: { ...item.meta, ruleName: 'text.strict', recommendedAction: 'design-update' as const },
           specSideEvidence: { spec_section: item.meta?.section, spec_text: expected, spec_items_count: specItems.length, spec_fulltext_hits: 0 },
           decisionMetadata: { rule_name: 'text.strict', decision_reason_code: 'SPEC_CONFIRMED_MISSING', decision_explanation: '스펙에 날짜가 공란으로 기재됨' },
-          diffType: 'UNMAPPED',
+          diffType: 'MISSING',
           requirement: item.sectionPath,
         });
         continue;
