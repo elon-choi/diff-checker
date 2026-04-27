@@ -299,7 +299,7 @@ async function deriveSpecItemsFromMarkdown(specText: string): Promise<{ items: S
           /^\d{4}년\s*0+월\s*0+일$/.test(dateValue);  // 00월 00일 placeholder
         items.push({
           id: `spec-legal-date-${i}-${j}`,
-          kind: 'POLICY',
+          kind: 'TEXT',
           text: part,
           sectionPath: sectionPath || undefined,
           intent: '법적 고지 날짜',
