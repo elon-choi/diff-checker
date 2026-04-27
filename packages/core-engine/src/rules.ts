@@ -731,8 +731,9 @@ export const textStrictRule: DiffRule = {
                 
                 // 핵심 키워드의 100% 매칭 필요 (모든 핵심 키워드가 포함되어야 함)
                 const matchedWords = specWords.filter(word => nodeWords.includes(word));
+                const keywordsMatch = specWords.length === 0 || matchedWords.length === specWords.length;
                 // 전체 포함 확인: 한국어는 단어 경계가 없으므로 순수 포함만 확인
-                if (nodeText.includes(strippedNorm)) {
+                if (keywordsMatch && nodeText.includes(strippedNorm)) {
                   return true;
                 }
               }
