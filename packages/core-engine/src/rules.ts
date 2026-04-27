@@ -565,7 +565,25 @@ export const textStrictRule: DiffRule = {
       if (!item.text) continue;
       const expected = item.text.trim();
       const expectedNorm = normalizeText(expected);
-      
+
+      // 공고/시행일 공란 케이스: WARN으로 즉시 처리
+      if (item.meta?.isBlankDate) {
+        findings.push({
+          id: `text.strict:${item.id}`,
+          severity: 'WARN',
+          category: 'TEXT_MISMATCH',
+          description: `공고/시행일이 스펙에 미확정(공란)입니다. 웹 기재 날짜를 확인하세요: "${expected}"`,
+          evidence: { expected, checkedDocs: platformsToCheck.map(p => p.platform), matchType: null, specItem: item },
+          relatedSpecId: item.id,
+          meta: { ...item.meta, ruleName: 'text.strict', recommendedAction: 'design-update' as const },
+          specSideEvidence: { spec_section: item.meta?.section, spec_text: expected, spec_items_count: specItems.length, spec_fulltext_hits: 0 },
+          decisionMetadata: { rule_name: 'text.strict', decision_reason_code: 'SPEC_CONFIRMED_MISSING', decision_explanation: '스펙에 날짜가 공란으로 기재됨' },
+          diffType: 'UNMAPPED',
+          requirement: item.sectionPath,
+        });
+        continue;
+      }
+
       console.log('[DEBUG] textStrictRule - SpecItem 처리 시작:', {
         id: item.id,
         text: expected.substring(0, 50),

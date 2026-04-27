@@ -284,6 +284,24 @@ async function deriveSpecItemsFromMarkdown(specText: string): Promise<{ items: S
     const textWithoutKey = selectorKey ? removeSelectorKeyFromText(cleanLine) : cleanLine;
     const sectionPath = getSectionPath();
     
+    // 0. 공고일자/시행일자 특별 추출 (법적 고지 날짜 — 길이/UI키워드 필터 우회)
+    if (/(공고일자|시행일자)\s*:/.test(cleanLine)) {
+      const isBlankDate = /\d{4}년\s+월\s+일/.test(cleanLine); // 연도만 있고 월/일 공란
+      items.push({
+        id: `spec-legal-date-${i}`,
+        kind: 'POLICY',
+        text: cleanLine,
+        sectionPath: sectionPath || undefined,
+        intent: '법적 고지 날짜',
+        expected: cleanLine,
+        meta: {
+          isBlankDate,
+          isDeprecated: parsed.isDeprecated,
+        },
+      });
+      continue;
+    }
+
     // 1. 따옴표로 감싼 텍스트 추출 (UI 텍스트로 간주)
     const quoted = textWithoutKey.match(/"([^"]+)"/);
     if (quoted) {
