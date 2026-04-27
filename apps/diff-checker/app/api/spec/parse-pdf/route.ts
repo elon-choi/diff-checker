@@ -11,6 +11,9 @@ async function extractTextFromPdf(buffer: Buffer): Promise<string> {
 
 async function extractTextFromDocx(buffer: Buffer): Promise<string> {
   const result = await mammoth.extractRawText({ buffer });
+  if (result.messages.length > 0) {
+    console.warn('[DOCX] 변환 경고:', result.messages);
+  }
   return result.value;
 }
 
