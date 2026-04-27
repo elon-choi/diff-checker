@@ -25,84 +25,98 @@ export const WebCollector = {
       );
     }
 
-    const browser = await browserType.launch({ headless: !headed });
-    const context = await browser.newContext();
-    const page = await context.newPage();
-    await page.goto(url, { waitUntil, timeout: timeoutMs });
-
-    const snapshot = await page.evaluate(() => {
-      function getPath(el: Element): string {
-        if (el === document.body) return '/html/body';
-        const parts: string[] = [];
-        let node: Element | null = el;
-        while (node && node !== document.body) {
-          const tag = node.tagName.toLowerCase();
-          const parent = node.parentElement;
-          if (!parent) break;
-          const siblings = Array.from(parent.children).filter(
-            (c) => c.tagName.toLowerCase() === tag
-          );
-          const index =
-            siblings.length > 1 ? `[${siblings.indexOf(node) + 1}]` : '';
-          parts.unshift(`${tag}${index}`);
-          node = parent;
-        }
-        return `/html/body/${parts.join('/')}`;
-      }
-
-      function visible(el: Element): boolean {
-        const style = window.getComputedStyle(el as Element);
-        const rect = (el as Element).getBoundingClientRect?.();
-        const hasSize = rect ? rect.width > 0 && rect.height > 0 : true;
-        return (
-          style.display !== 'none' &&
-          style.visibility !== 'hidden' &&
-          hasSize
-        );
-      }
-
-      const nodes: any[] = [];
-      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT, null);
-      let current: Node | null = walker.currentNode;
-      while ((current = walker.nextNode())) {
-        const el = current as Element;
-        const role = (el.getAttribute('role') || '').toLowerCase();
-        const tag = el.tagName.toLowerCase();
-        const name =
-          el.getAttribute('name') ||
-          el.getAttribute('aria-label') ||
-          el.getAttribute('id') ||
-          el.textContent?.trim()?.slice(0, 64);
-
-        const attrs: Record<string, string> = {};
-        for (const a of Array.from(el.attributes)) {
-          if (['class', 'style'].includes(a.name)) continue;
-          attrs[a.name] = a.value;
-        }
-
-        nodes.push({
-          role: role || undefined,
-          tag,
-          name: name || undefined,
-          textContent: el.textContent?.trim() || undefined,
-          path: getPath(el),
-          selector: getPath(el),
-          visible: visible(el),
-          attrs,
-        });
-      }
-
-      return {
-        title: document.title,
-        nodes,
-      };
+    const browser = await browserType.launch({
+      headless: !headed,
+      args: headed ? [] : ['--no-sandbox', '--disable-setuid-sandbox'],
     });
 
-    await fs.mkdir(path.dirname(outPath), { recursive: true });
-    await fs.writeFile(outPath, JSON.stringify(snapshot, null, 2), 'utf-8');
+    try {
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 720 },
+      });
+      const page = await context.newPage();
 
-    await browser.close();
-    return { url, outPath, count: snapshot.nodes?.length ?? 0 };
+      try {
+        await page.goto(url, { waitUntil, timeout: timeoutMs });
+      } catch (gotoError: any) {
+        throw new Error(`페이지 로딩 실패: ${gotoError.message}`);
+      }
+
+      const snapshot = await page.evaluate(() => {
+        function getPath(el: Element): string {
+          if (el === document.body) return '/html/body';
+          const parts: string[] = [];
+          let node: Element | null = el;
+          while (node && node !== document.body) {
+            const tag = node.tagName.toLowerCase();
+            const parent = node.parentElement;
+            if (!parent) break;
+            const siblings = Array.from(parent.children).filter(
+              (c) => c.tagName.toLowerCase() === tag
+            );
+            const index =
+              siblings.length > 1 ? `[${siblings.indexOf(node) + 1}]` : '';
+            parts.unshift(`${tag}${index}`);
+            node = parent;
+          }
+          return `/html/body/${parts.join('/')}`;
+        }
+
+        function visible(el: Element): boolean {
+          const style = window.getComputedStyle(el as Element);
+          const rect = (el as Element).getBoundingClientRect?.();
+          const hasSize = rect ? rect.width > 0 && rect.height > 0 : true;
+          return (
+            style.display !== 'none' &&
+            style.visibility !== 'hidden' &&
+            hasSize
+          );
+        }
+
+        const nodes: any[] = [];
+        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT, null);
+        let current: Node | null = walker.currentNode;
+        while ((current = walker.nextNode())) {
+          const el = current as Element;
+          const role = (el.getAttribute('role') || '').toLowerCase();
+          const tag = el.tagName.toLowerCase();
+          const name =
+            el.getAttribute('name') ||
+            el.getAttribute('aria-label') ||
+            el.getAttribute('id') ||
+            el.textContent?.trim()?.slice(0, 64);
+
+          const attrs: Record<string, string> = {};
+          for (const a of Array.from(el.attributes)) {
+            if (['class', 'style'].includes(a.name)) continue;
+            attrs[a.name] = a.value;
+          }
+
+          nodes.push({
+            role: role || undefined,
+            tag,
+            name: name || undefined,
+            textContent: el.textContent?.trim() || undefined,
+            path: getPath(el),
+            selector: getPath(el),
+            visible: visible(el),
+            attrs,
+          });
+        }
+
+        return {
+          title: document.title,
+          nodes,
+        };
+      });
+
+      await fs.mkdir(path.dirname(outPath), { recursive: true });
+      await fs.writeFile(outPath, JSON.stringify(snapshot, null, 2), 'utf-8');
+
+      return { url, outPath, count: snapshot.nodes?.length ?? 0 };
+    } finally {
+      await browser.close();
+    }
   },
 };
 
