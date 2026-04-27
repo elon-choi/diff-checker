@@ -6,6 +6,8 @@ function normalizeText(value?: string): string {
   return (value ?? '')
     .toString()
     .trim()
+    .replace(/^[\s\p{P}\p{S}]+(?=\p{L})/u, '') // 줄 앞 서식 기호 제거 (•, -, ① 등)
+    .replace(/제\s+(\d+)\s+조/g, '제$1조')       // 조항 번호 공백 정규화
     .replace(/\s+/g, ' ')
     .toLowerCase();
 }
