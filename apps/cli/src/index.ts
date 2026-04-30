@@ -194,16 +194,16 @@ async function main() {
   );
 
   const outDir = path.resolve(cwd, `reports/phase-${config.phase}`);
-  await StorageAdapter.ensureDir(outDir);
 
   await Promise.all([
-    StorageAdapter.writeText(path.join(outDir, 'report.md'), toMarkdown(findings as any, config.phase)),
-    StorageAdapter.writeText(path.join(outDir, 'report.json'), toJson(findings as any, config.phase)),
-    StorageAdapter.writeText(path.join(outDir, 'report.html'), toHtml(findings as any, config.phase)),
+    StorageAdapter.writeText(path.join(outDir, 'report.md'), toMarkdown(findings, config.phase)),
+    StorageAdapter.writeText(path.join(outDir, 'report.json'), toJson(findings, config.phase)),
+    StorageAdapter.writeText(path.join(outDir, 'report.html'), toHtml(findings, config.phase)),
   ]);
 
   console.log(`Phase ${config.phase} Diff 완료. 결과: ${findings.length}건`);
-  console.log(`보고서: ${outDir}/report.{md,json,html}`);
+  console.log(`보고서 디렉토리: ${outDir}`);
+  console.log(`  - report.md / report.json / report.html`);
 }
 
 main().catch(err => {
