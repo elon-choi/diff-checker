@@ -639,25 +639,13 @@ export const textStrictRule: DiffRule = {
           }
         }
 
-        // 부분 문자열 포함 확인 (매우 엄격한 조건)
-        // Web DOM의 텍스트가 합쳐져 있을 수 있지만, 실제로는 다른 텍스트인데 부분 문자열이 포함될 수 있으므로 매우 엄격하게 검사
+        // 부분 문자열 포함 확인
+        // Web DOM에서 BR 태그나 인접 span 병합으로 텍스트가 합쳐질 수 있으므로
+        // expectedNorm(≥10자)이 nodeText에 포함되면 매칭으로 인정
         const partialMatch = doc.nodes.find((node) => {
           const nodeText = normalizeText(node.text || node.name || '');
-          
-          // Spec 텍스트가 Web 텍스트에 포함되어 있는지 확인
-          // 조건: Spec 텍스트가 10자 이상이고, Web 텍스트가 Spec 텍스트보다 충분히 길어야 함
           if (expectedNorm.length >= 10 && nodeText.length >= expectedNorm.length * 0.8) {
-            // 핵심 키워드 추출 (2자 이상의 단어만)
-            const specWords = expectedNorm.split(' ').filter(w => w.length > 2);
-            const nodeWords = nodeText.split(' ').filter(w => w.length > 2);
-            
-            // 핵심 키워드의 100% 매칭 필요 (모든 핵심 키워드가 포함되어야 함)
-            const matchedWords = specWords.filter(word => nodeWords.includes(word));
-            const keywordsMatch = specWords.length === 0 || matchedWords.length === specWords.length;
-            // 전체 포함 확인: 한국어는 단어 경계가 없으므로 순수 포함만 확인
-            if (keywordsMatch && nodeText.includes(expectedNorm)) {
-              return true;
-            }
+            return nodeText.includes(expectedNorm);
           }
           return false;
         });
@@ -706,18 +694,6 @@ export const textStrictRule: DiffRule = {
               bestMatch = { node, platform, similarity };
               hasMatch = true;
             }
-          } else {
-            // 매칭 실패 로그
-            console.log('[DEBUG] textStrictRule - 유사도 매칭 실패:', {
-              specText: expected.substring(0, 50),
-              nodeText: nodeText.substring(0, 50),
-              similarity: similarity.toFixed(2),
-              keywordMatchRatio: keywordMatchRatio.toFixed(2),
-              lengthRatio: lengthRatio.toFixed(2),
-              isSubstringMatch,
-              expectedWords,
-              matchedKeywords,
-            });
           }
         }
       }
@@ -741,21 +717,11 @@ export const textStrictRule: DiffRule = {
               break;
             }
 
-            // 부분 문자열 포함 확인 (매우 엄격한 매칭)
+            // 부분 문자열 포함 확인
             const partialMatch = doc.nodes.find((node) => {
               const nodeText = normalizeText(node.text || node.name || '');
               if (strippedNorm.length >= 10 && nodeText.length >= strippedNorm.length * 0.8) {
-                // 핵심 키워드 추출 (2자 이상의 단어만)
-                const specWords = strippedNorm.split(' ').filter(w => w.length > 2);
-                const nodeWords = nodeText.split(' ').filter(w => w.length > 2);
-                
-                // 핵심 키워드의 100% 매칭 필요 (모든 핵심 키워드가 포함되어야 함)
-                const matchedWords = specWords.filter(word => nodeWords.includes(word));
-                const keywordsMatch = specWords.length === 0 || matchedWords.length === specWords.length;
-                // 전체 포함 확인: 한국어는 단어 경계가 없으므로 순수 포함만 확인
-                if (keywordsMatch && nodeText.includes(strippedNorm)) {
-                  return true;
-                }
+                return nodeText.includes(strippedNorm);
               }
               return false;
             });
