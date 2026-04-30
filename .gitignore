@@ -9,3 +9,6 @@ dist/
 build/
 *.log
 apps/diff-checker/.env.local
+
+# 런타임 산출물 (diff 결과)
+reports/

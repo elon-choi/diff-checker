@@ -8,6 +8,8 @@ import { WebNormalizer } from '../../../packages/normalizers/web-normalizer/src/
 import { AndroidNormalizer } from '../../../packages/normalizers/android-normalizer/src/index';
 import { IOSNormalizer } from '../../../packages/normalizers/ios-normalizer/src/index';
 import { toMarkdown } from '../../../packages/reporters/markdown-reporter/src/index';
+import { toJson } from '../../../packages/reporters/json-reporter/src/index';
+import { toHtml } from '../../../packages/reporters/html-reporter/src/index';
 import { StorageAdapter } from '../../../packages/adapters/storage-adapter/src/index';
 import { LLMAdapter } from '../../../packages/adapters/llm-adapter/src/index';
 import {
@@ -191,12 +193,17 @@ async function main() {
     specItems
   );
 
-  const report = toMarkdown(findings as any, config.phase);
-  const outPath = path.resolve(cwd, `reports/phase-${config.phase}.md`);
-  await StorageAdapter.writeText(outPath, report);
+  const outDir = path.resolve(cwd, `reports/phase-${config.phase}`);
+
+  await Promise.all([
+    StorageAdapter.writeText(path.join(outDir, 'report.md'), toMarkdown(findings, config.phase)),
+    StorageAdapter.writeText(path.join(outDir, 'report.json'), toJson(findings, config.phase)),
+    StorageAdapter.writeText(path.join(outDir, 'report.html'), toHtml(findings, config.phase)),
+  ]);
 
   console.log(`Phase ${config.phase} Diff 완료. 결과: ${findings.length}건`);
-  console.log(`보고서: ${outPath}`);
+  console.log(`보고서 디렉토리: ${outDir}`);
+  console.log(`  - report.md / report.json / report.html`);
 }
 
 main().catch(err => {
