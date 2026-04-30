@@ -1,6 +1,12 @@
 import { UUMDocument, UUMNode } from '../../../core-engine/src/types';
 import { normalizeKey } from '../../spec-normalizer/src/selector-key';
 
+// "19.기타..." → "19. 기타..." 처럼 번호 마커 뒤 공백 정규화
+function normalizeListNumber(text: string | undefined): string | undefined {
+  if (!text) return text;
+  return text.replace(/^(\d+\.)([^\s])/, '$1 $2');
+}
+
 type DomNode = {
   uid?: string;
   tag?: string;
@@ -75,7 +81,7 @@ export const WebNormalizer = {
           platform: 'WEB',
           role: n?.role ?? 'ELEMENT',
           name: n?.tag ?? n?.name ?? 'node',
-          text: n?.textContent ?? n?.text,
+          text: normalizeListNumber(n?.textContent ?? n?.text),
           selector: n?.selector ?? n?.path ?? undefined,
           visible: n?.visible ?? true,
           path: n?.path ?? `/web/${i}`,
@@ -94,7 +100,7 @@ export const WebNormalizer = {
           platform: 'WEB',
           role: node.role ?? node.tag ?? 'NODE',
           name: node.name ?? node.tag,
-          text: node.text,
+          text: normalizeListNumber(node.text),
           selector: thisPath,
           visible: node.visible ?? true,
           bounds: node.bounds,
