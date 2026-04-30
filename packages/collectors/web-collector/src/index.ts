@@ -73,6 +73,14 @@ export const WebCollector = {
           );
         }
 
+        // <br> 등 줄바꿈 요소를 공백으로 치환하여 textContent를 추출
+        // textContent는 BR을 무시하고 붙여버리므로(예: "10일시행일자") innerText 방식으로 추출
+        function getVisualText(el: Element): string {
+          const clone = el.cloneNode(true) as Element;
+          clone.querySelectorAll('br').forEach(br => br.replaceWith(' '));
+          return (clone.textContent || '').replace(/\s+/g, ' ').trim();
+        }
+
         const nodes: any[] = [];
         const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT, null);
         let current: Node | null = walker.currentNode;
@@ -80,11 +88,12 @@ export const WebCollector = {
           const el = current as Element;
           const role = (el.getAttribute('role') || '').toLowerCase();
           const tag = el.tagName.toLowerCase();
+          const visualText = getVisualText(el);
           const name =
             el.getAttribute('name') ||
             el.getAttribute('aria-label') ||
             el.getAttribute('id') ||
-            el.textContent?.trim()?.slice(0, 64);
+            visualText.slice(0, 64) || undefined;
 
           const attrs: Record<string, string> = {};
           for (const a of Array.from(el.attributes)) {
@@ -96,7 +105,7 @@ export const WebCollector = {
             role: role || undefined,
             tag,
             name: name || undefined,
-            textContent: el.textContent?.trim() || undefined,
+            textContent: visualText || undefined,
             path: getPath(el),
             selector: getPath(el),
             visible: visible(el),
